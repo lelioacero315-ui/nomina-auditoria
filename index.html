@@ -225,6 +225,7 @@ var S={
   pilaDet:[], pilaMap:null, pilaHdr:-1, pilaMatriz:null, pilaArchivo:'',
   pilaDebug:null, pilaAviso:'',
   historico:{}, histComp:'', destinoPDF:null, avisoHist:'', histLote:null,
+  focoCorreccion:'',
   ibcAnt:{}, ibcMesLabel:'',
   pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
   loading:false, error:'', fileName:'', debugLines:null,
@@ -1803,7 +1804,7 @@ function exportActaResumen(){
     var lleno=maximo?Math.max(3,Math.round(valor/maximo*BAR_W)):0;
     var vacio=BAR_W-lleno;
     return '<tr>'+
-      '<td style="width:185px;padding:3px 6px;font-size:10pt">'+label+'</td>'+
+      '<td style="width:185px;padding:3pt 6pt;font-size:11pt">'+label+'</td>'+
       '<td style="width:'+BAR_W+'px;padding:3px 0">'+
         '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:'+BAR_W+'px">'+
         '<tr>'+
@@ -1812,27 +1813,27 @@ function exportActaResumen(){
         (vacio>0?'<td width="'+vacio+'" style="width:'+vacio+'px;background:#EDE8E0'+
           ';height:12px;line-height:12px;font-size:1pt">&nbsp;</td>':'')+
         '</tr></table></td>'+
-      '<td style="width:130px;padding:3px 6px;font-size:10pt;text-align:right;white-space:nowrap;'+
+      '<td style="width:130px;padding:3pt 6pt;font-size:11pt;text-align:right;white-space:nowrap;'+
         'white-space:nowrap">'+texto+'</td>'+
     '</tr>';
   }
 
   /* ---- Celda de sección combinada ---- */
   function sec(titulo){
-    return '<tr><td colspan="2" style="border:1px solid #000;padding:4pt 5pt;'+
-      'background:#D9D9D9;font-weight:bold;font-size:10pt;text-align:left">'+titulo+'</td></tr>';
+    return '<tr><td colspan="2" style="border:1pt solid #000;padding:4pt 6pt;'+
+      'font-weight:bold;font-size:11pt;text-align:justify">'+titulo+'</td></tr>';
   }
   function fila(etq,val){
     return '<tr>'+
-      '<td width="18%" style="border:1px solid #000;padding:4pt 5pt;width:3.1cm;background:#F2F2F2;'+
-        'font-weight:bold;font-size:9.5pt;vertical-align:top;text-align:left;'+
-        'white-space:nowrap">'+etq+'</td>'+
-      '<td style="border:1px solid #000;padding:4pt 5pt;font-size:10pt;text-align:justify">'+val+'</td>'+
+      '<td style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;'+
+        'font-size:11pt;vertical-align:top;text-align:justify">'+etq+'</td>'+
+      '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;'+
+        'text-align:justify">'+val+'</td>'+
     '</tr>';
   }
   function bloque(html){
-    return '<tr><td colspan="2" style="border:1px solid #000;padding:5pt 7pt;'+
-      'font-size:10pt;text-align:justify">'+html+'</td></tr>';
+    return '<tr><td colspan="2" style="border:1pt solid #000;padding:5pt 7pt;'+
+      'font-size:11pt;text-align:justify">'+html+'</td></tr>';
   }
 
   var totParaf=C.pilaNN.ccf+C.pilaNN.sena+C.pilaNN.icbf+C.pilaNN.esap+C.pilaNN.men;
@@ -1843,7 +1844,7 @@ function exportActaResumen(){
   var hallHtml=I.hallazgos.map(function(h,i){
     var col=h.sev==='CRÍTICO'?'#DC2626':h.sev==='ALTO'?'#D97706':h.sev==='MODERADO'?'#2563A8':'#0E9F6E';
     return '<p style="margin:5px 0"><b>'+(i+1)+'. '+esc(h.mod)+'</b> '+
-      '<span style="color:'+col+';font-weight:bold;font-size:9pt">['+h.sev+']</span><br>'+
+      '<span style="color:'+col+';font-weight:bold;font-size:11pt">['+h.sev+']</span><br>'+
       esc(h.hall)+'<br><i>Recomendación:</i> '+esc(h.rec)+
       ' <span style="color:#666">(Plazo: '+esc(h.plazo||'—')+')</span></p>';
   }).join('');
@@ -1853,11 +1854,11 @@ function exportActaResumen(){
     .sort(function(a,b){return Math.abs(b.diag.dif)-Math.abs(a.diag.dif);});
   var difHtml=difs.slice(0,15).map(function(r){
     return '<tr>'+
-      '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt">'+esc(r.nombre)+'</td>'+
-      '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(r.retRep)+'</td>'+
-      '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(r.diag.dif+r.retRep)+'</td>'+
-      '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap;color:#DC2626">'+cop(r.diag.dif)+'</td>'+
-      '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt">'+esc(r.diag.etiq)+'</td>'+
+      '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt">'+esc(r.nombre)+'</td>'+
+      '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(r.retRep)+'</td>'+
+      '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(r.diag.dif+r.retRep)+'</td>'+
+      '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap;color:#DC2626">'+cop(r.diag.dif)+'</td>'+
+      '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt">'+esc(r.diag.etiq)+'</td>'+
     '</tr>';
   }).join('');
 
@@ -1866,55 +1867,40 @@ function exportActaResumen(){
     '<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>'+
     '<w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->'+
     '<style>'+
-    /* Configuración de página para Word: exige una sección nombrada.
-       Con @page genérico Word aplica sus márgenes por defecto (2,5 y 3 cm)
-       e ignora los declarados. */
+    /* Réplica exacta del formato FO-GD-11: carta, márgenes de 2 cm,
+       encabezado a 0,5 cm y pie a 1,25 cm. El encabezado se declara como
+       elemento de Word para que se repita en todas las páginas. */
     '@page WordSection1{size:21.59cm 27.94cm;margin:2cm 2cm 2cm 2cm;'+
-      'mso-header-margin:1cm;mso-footer-margin:1cm;mso-paper-source:0}'+
+      'mso-header-margin:.5cm;mso-footer-margin:1.25cm;mso-paper-source:0;'+
+      'mso-header:url(#h1);mso-footer:url(#f1)}'+
     'div.WordSection1{page:WordSection1}'+
     'body{font-family:Arial,sans-serif;font-size:11pt;color:#000;'+
-      'text-align:justify;line-height:1.35;margin:0}'+
-    'table{border-collapse:collapse;width:100%;font-size:10pt}'+
-    'td,th{text-align:left;vertical-align:top;word-wrap:break-word;hyphens:none}'+
-    'td p,th p{margin:0;text-align:left}'+
-    'p{margin:4pt 0;line-height:1.35;text-align:justify}'+
+      'text-align:justify;line-height:1.25;margin:0}'+
+    'table{border-collapse:collapse;font-size:11pt}'+
+    'td,th{vertical-align:top;word-wrap:break-word;text-align:justify}'+
+    'td p,th p{margin:0;text-align:justify}'+
+    'p{margin:3pt 0;line-height:1.25;text-align:justify}'+
     '</style></head><body><div class="WordSection1">'+
 
-    /* ===== ENCABEZADO institucional ===== */
-    '<table width="100%" style="border-collapse:collapse;margin-bottom:8pt;width:17.6cm">'+
-    '<colgroup><col style="width:3.7cm"><col style="width:9.7cm"><col style="width:4.2cm"></colgroup>'+
-    '<tr>'+
-      '<td width="21%" style="border:1px solid #000;width:3.7cm;text-align:center;padding:4pt;vertical-align:middle">'+
-        '<img src="'+ESCUDO_B64+'" style="width:78px;height:auto" alt="Gobernación de Casanare"></td>'+
-      '<td width="55%" style="border:1px solid #000;width:9.7cm;text-align:center;padding:4pt;'+
-        'vertical-align:middle;font-weight:bold;font-size:13pt">ACTA RESUMEN</td>'+
-      /* Bloque de control documental con divs apilados: una tabla anidada
-         se desordena al convertir, los divs mantienen el orden vertical. */
-      '<td width="24%" style="border:1px solid #000;width:4.2cm;padding:0;vertical-align:top">'+
-        '<div style="border-bottom:1px solid #000;padding:3pt 5pt;font-size:9pt">FO-GD-11</div>'+
-        '<div style="border-bottom:1px solid #000;padding:3pt 5pt;font-size:9pt">19-09-2024</div>'+
-        '<div style="padding:3pt 5pt;font-size:9pt">V. 05</div>'+
-      '</td>'+
-    '</tr></table>'+
+    /* El encabezado institucional va como elemento de página (ver final). */
 
     /* ===== TÍTULO ===== */
     /* Jerarquía en tres niveles: título, entidad y datos del contrato,
        con espacios medidos para que no se amontone con el encabezado. */
-    '<p style="text-align:center;font-weight:bold;font-size:12pt;margin:14pt 0 2pt">'+
-      'INFORME TÉCNICO DE ACTIVIDADES</p>'+
-    '<p style="text-align:center;font-weight:bold;font-size:11pt;color:#333;margin:0 0 9pt">'+
-      'ACTA RESUMEN</p>'+
-    '<p style="text-align:center;font-size:10pt;margin:0 0 2pt">'+
+    '<p style="text-align:center;font-weight:bold;font-size:11pt;margin:0 0 2pt">'+
+      'INFORME TÉCNICO DE ACTIVIDADES – ACTA RESUMEN</p>'+
+    
+    '<p style="text-align:center;font-size:11pt;margin:0 0 2pt">'+
       'Gobernación de Casanare · Dirección de Talento Humano</p>'+
-    '<p style="text-align:center;font-size:9.5pt;color:#444;margin:0 0 12pt">'+
+    '<p style="text-align:center;font-size:11pt;margin:0 0 10pt">'+
       esc(I.contratoCorto)+' · Período: '+perStr+' · '+esc(regTxt)+'</p>'+
 
     /* ===== TABLA PRINCIPAL =====
        colgroup fija el ancho de la columna de etiquetas: los atributos de
        ancho en <col> los respetan tanto Word como LibreOffice, a diferencia
        del CSS en las celdas, que algunos conversores recalculan. */
-    '<table width="100%" style="border-collapse:collapse;width:17.6cm">'+
-    '<colgroup><col style="width:3.1cm"><col style="width:14.5cm"></colgroup>'+
+    '<table style="border-collapse:collapse;width:18.33cm">'+
+    '<colgroup><col style="width:3.21cm"><col style="width:15.12cm"></colgroup>'+
     fila('TEMA:','Auditoría técnica de la liquidación de nómina, seguridad social, '+
       'aportes parafiscales y retención en la fuente — '+regTxt+' │ Verificación '+
       'normativa contra prototipos KACTUS 101, 102 y 159.')+
@@ -1943,16 +1929,16 @@ function exportActaResumen(){
     bloque('<p>La auditoría abarcó la totalidad de la planta de '+regTxt+' liquidada en la '+
       'prenómina del período '+perStr+', conforme al detalle siguiente:</p>'+
       '<table width="100%" style="border-collapse:collapse;margin-top:4pt;width:100%">'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;width:330px;font-size:10pt">Servidores auditados</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;text-align:right;white-space:nowrap;font-size:10pt"><b>'+rows.length+'</b></td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Total devengado del período</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap"><b>'+cop(C.tot.devArch)+'</b></td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Servidores en situación normal</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;text-align:right;white-space:nowrap;font-size:10pt">'+(ind.NORMAL||0)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Servidores con novedad de vacaciones</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;text-align:right;white-space:nowrap;font-size:10pt">'+(ind.VACACIONES||0)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Servidores con novedad de incapacidad</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;text-align:right;white-space:nowrap;font-size:10pt">'+(ind.INCAPACIDAD||0)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;width:330px;font-size:11pt">Servidores auditados</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:right;white-space:nowrap;font-size:11pt"><b>'+rows.length+'</b></td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Total devengado del período</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap"><b>'+cop(C.tot.devArch)+'</b></td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Servidores en situación normal</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:right;white-space:nowrap;font-size:11pt">'+(ind.NORMAL||0)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Servidores con novedad de vacaciones</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:right;white-space:nowrap;font-size:11pt">'+(ind.VACACIONES||0)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Servidores con novedad de incapacidad</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:right;white-space:nowrap;font-size:11pt">'+(ind.INCAPACIDAD||0)+'</td></tr>'+
       '</table>'+
       '<p style="margin-top:7px"><b>Ilustración 1.</b> Distribución de novedades del período.</p>'+
       '<table width="100%" style="border-collapse:collapse;margin-top:3pt;width:100%">'+
@@ -1987,12 +1973,12 @@ function exportActaResumen(){
       '</table>'+
       '<p style="margin-top:7px"><b>Bases de cotización determinadas:</b></p>'+
       '<table width="100%" style="border-collapse:collapse;width:100%">'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;width:330px;font-size:10pt">Base Seguridad Social (Prototipo 101)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.baseSS||0)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Base Parafiscales (Prototipo 159)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.baseParaf||0)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt"><b>Diferencia entre bases</b></td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap"><b>'+cop(difBase)+'</b></td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;width:330px;font-size:11pt">Base Seguridad Social (Prototipo 101)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.baseSS||0)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Base Parafiscales (Prototipo 159)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.baseParaf||0)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt"><b>Diferencia entre bases</b></td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap"><b>'+cop(difBase)+'</b></td></tr>'+
       '</table>'+
       (Math.abs(difBase)>1000000?'<p style="margin-top:6px"><i>Análisis técnico:</i> la base '+
         'parafiscal supera la de seguridad social en '+cop(difBase)+' por incluir conceptos '+
@@ -2003,18 +1989,18 @@ function exportActaResumen(){
 
     sec('4. VERIFICACIÓN DE APORTES PARAFISCALES')+
     bloque('<table width="100%" style="border-collapse:collapse;width:100%">'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;width:330px;font-size:10pt">Caja de Compensación (4%)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.pilaNN.ccf)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">SENA (0,5%)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.pilaNN.sena)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">ICBF (3%)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.pilaNN.icbf)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">ESAP (0,5%)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.pilaNN.esap)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;font-size:10pt">Escuelas Industriales / MEN (1%)</td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;width:170px;text-align:right;white-space:nowrap;font-size:10pt;white-space:nowrap">'+cop(C.pilaNN.men)+'</td></tr>'+
-      '<tr><td style="border:1px solid #999;padding:4px 7px;background:#F2F2F2;font-size:10pt"><b>TOTAL PARAFISCALES</b></td>'+
-        '<td style="border:1px solid #999;padding:4px 7px;text-align:right;white-space:nowrap;background:#F2F2F2;font-size:10pt"><b>'+cop(totParaf)+'</b></td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;width:330px;font-size:11pt">Caja de Compensación (4%)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.pilaNN.ccf)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">SENA (0,5%)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.pilaNN.sena)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">ICBF (3%)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.pilaNN.icbf)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">ESAP (0,5%)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.pilaNN.esap)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">Escuelas Industriales / MEN (1%)</td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;width:170px;text-align:right;white-space:nowrap;font-size:11pt;white-space:nowrap">'+cop(C.pilaNN.men)+'</td></tr>'+
+      '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt"><b>TOTAL PARAFISCALES</b></td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:right;white-space:nowrap;font-size:11pt"><b>'+cop(totParaf)+'</b></td></tr>'+
       '</table>'+
       '<p style="margin-top:6px">Los aportes parafiscales se liquidan sobre la nómina total, '+
       'sin sujeción al tope de 25 SMLMV, que es propio del Sistema de Seguridad Social '+
@@ -2040,12 +2026,12 @@ function exportActaResumen(){
       (difHtml?'<p style="margin-top:6px"><b>Ilustración 2.</b> Casos con diferencia '+
         '(mayores '+Math.min(15,difs.length)+' de '+difs.length+').</p>'+
         '<table width="100%" style="border-collapse:collapse;margin-top:3pt;width:100%">'+
-        '<tr style="background:#D9D9D9">'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:left">Servidor</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Retenido</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Esperado</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Diferencia</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:left">Causa</th></tr>'+
+        '<tr>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt;text-align:left">Servidor</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Retenido</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Esperado</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Diferencia</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt;text-align:left">Causa</th></tr>'+
         difHtml+'</table>':''))+
 
     (function(){
@@ -2053,13 +2039,13 @@ function exportActaResumen(){
       if(!V) return '';
       var filas=V.lista.map(function(v){
         return '<tr>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt">'+esc(v.nombre)+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:center">'+v.dias+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(v.baseFormato)+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(v.baseKactus)+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(v.difBase)+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(v.difSuel)+'</td>'+
-          '<td style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:right;white-space:nowrap">'+cop(v.difPrima)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt">'+esc(v.nombre)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:center">'+v.dias+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(v.baseFormato)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(v.baseKactus)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(v.difBase)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(v.difSuel)+'</td>'+
+          '<td style="border:1pt solid #000;padding:3pt 5pt;font-size:11pt;text-align:right;white-space:nowrap">'+cop(v.difPrima)+'</td>'+
         '</tr>';
       }).join('');
       return sec('6. LIQUIDACIÓN DE VACACIONES')+
@@ -2071,19 +2057,19 @@ function exportActaResumen(){
         '<i>Sueldo en vacaciones = Base ÷ 30 × días de disfrute</i><br>'+
         '<i>Prima de vacaciones = Base ÷ 30 × 15 días</i> (Decreto 1045 de 1978, artículo 24)</p>'+
         '<table width="100%" style="border-collapse:collapse;margin-top:4pt;width:100%">'+
-        '<tr style="background:#D9D9D9">'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt;text-align:left">Servidor</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Días</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Base formato</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Base aplicada</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Dif. base</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Dif. sueldo</th>'+
-        '<th style="border:1px solid #999;padding:3px 5px;font-size:9pt">Dif. prima</th></tr>'+
+        '<tr>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt;text-align:left">Servidor</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Días</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Base formato</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Base aplicada</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Dif. base</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Dif. sueldo</th>'+
+        '<th style="border:1pt solid #000;padding:3pt 5pt;font-weight:bold;font-size:11pt">Dif. prima</th></tr>'+
         filas+
-        '<tr style="background:#F2F2F2">'+
-        '<td colspan="5" style="border:1px solid #999;padding:4px 5px;font-size:9pt"><b>TOTALES</b></td>'+
-        '<td style="border:1px solid #999;padding:4px 5px;font-size:9pt;text-align:right;white-space:nowrap"><b>'+cop(V.tot.suel)+'</b></td>'+
-        '<td style="border:1px solid #999;padding:4px 5px;font-size:9pt;text-align:right;white-space:nowrap"><b>'+cop(V.tot.prima)+'</b></td></tr>'+
+        '<tr>'+
+        '<td colspan="5" style="border:1pt solid #000;padding:4px 5px;font-size:11pt"><b>TOTALES</b></td>'+
+        '<td style="border:1pt solid #000;padding:4px 5px;font-size:11pt;text-align:right;white-space:nowrap"><b>'+cop(V.tot.suel)+'</b></td>'+
+        '<td style="border:1pt solid #000;padding:4px 5px;font-size:11pt;text-align:right;white-space:nowrap"><b>'+cop(V.tot.prima)+'</b></td></tr>'+
         '</table>'+
         '<p style="margin-top:7px"><b>Verificación practicada:</b> se comprobó que en la totalidad '+
         'de los casos la prima de vacaciones pagada equivale al sueldo en vacaciones multiplicado '+
@@ -2104,23 +2090,23 @@ function exportActaResumen(){
     sec('8. CALIFICACIÓN DE LA AUDITORÍA')+
     bloque('<p>Calificación ponderada bajo metodología MECI 2014 y Marco Conceptual COSO 2013:</p>'+
       '<table width="100%" style="border-collapse:collapse;margin-top:4pt;width:100%">'+
-      '<tr style="background:#D9D9D9">'+
-      '<th style="border:1px solid #999;padding:4px 6px;font-size:10pt;text-align:left">Módulo</th>'+
-      '<th style="border:1px solid #999;padding:4px 6px;font-size:10pt">Peso</th>'+
-      '<th style="border:1px solid #999;padding:4px 6px;font-size:10pt">Nota</th>'+
-      '<th style="border:1px solid #999;padding:4px 6px;font-size:10pt">Ponderado</th></tr>'+
+      '<tr>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt;text-align:left">Módulo</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Peso</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Nota</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Ponderado</th></tr>'+
       I.califs.map(function(m){
         var c=m.n>=90?'#0E9F6E':m.n>=75?'#2563A8':m.n>=60?'#D97706':'#DC2626';
-        return '<tr><td style="border:1px solid #999;padding:4px 6px;font-size:10pt">'+esc(m.m)+'</td>'+
-          '<td style="border:1px solid #999;padding:4px 6px;text-align:center;font-size:10pt">'+(m.p*100).toFixed(0)+'%</td>'+
-          '<td style="border:1px solid #999;padding:4px 6px;text-align:center;font-size:10pt;color:'+c+'"><b>'+m.n+'</b></td>'+
-          '<td style="border:1px solid #999;padding:4px 6px;text-align:center;font-size:10pt">'+(m.n*m.p).toFixed(1)+'</td></tr>';
+        return '<tr><td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">'+esc(m.m)+'</td>'+
+          '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:center;font-size:11pt">'+(m.p*100).toFixed(0)+'%</td>'+
+          '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:center;font-size:11pt;color:'+c+'"><b>'+m.n+'</b></td>'+
+          '<td style="border:1pt solid #000;padding:4pt 6pt;text-align:center;font-size:11pt">'+(m.n*m.p).toFixed(1)+'</td></tr>';
       }).join('')+
       '<tr style="background:'+nivC+';color:#fff">'+
-      '<td style="border:1px solid #999;padding:5px 6px;font-size:10pt"><b>CALIFICACIÓN PONDERADA</b></td>'+
-      '<td style="border:1px solid #999;padding:5px 6px;text-align:center;font-size:10pt"><b>100%</b></td>'+
-      '<td style="border:1px solid #999;padding:5px 6px;text-align:center;font-size:11pt"><b>'+pond.toFixed(1)+'</b></td>'+
-      '<td style="border:1px solid #999;padding:5px 6px;text-align:center;font-size:10pt"><b>'+nivT+'</b></td></tr>'+
+      '<td style="border:1pt solid #000;padding:5px 6px;font-size:11pt"><b>CALIFICACIÓN PONDERADA</b></td>'+
+      '<td style="border:1pt solid #000;padding:5px 6px;text-align:center;font-size:11pt"><b>100%</b></td>'+
+      '<td style="border:1pt solid #000;padding:5px 6px;text-align:center;font-size:11pt"><b>'+pond.toFixed(1)+'</b></td>'+
+      '<td style="border:1pt solid #000;padding:5px 6px;text-align:center;font-size:11pt"><b>'+nivT+'</b></td></tr>'+
       '</table>')+
 
     sec('9. CONCLUSIÓN TÉCNICA')+
@@ -2137,38 +2123,57 @@ function exportActaResumen(){
     '</table>'+
 
     /* ===== ASISTENTES ===== */
-    '<p style="margin-top:12px;font-weight:bold;font-size:10pt;text-align:center">ASISTENTES</p>'+
-    '<table width="100%" style="border-collapse:collapse;width:17.6cm">'+
-    '<colgroup><col style="width:4.6cm"><col style="width:4.6cm"><col style="width:5.3cm"><col style="width:3.1cm"></colgroup>'+
-    '<tr style="background:#D9D9D9">'+
-      '<th style="border:1px solid #000;padding:4pt 5pt;font-size:10pt">Nombre Completo</th>'+
-      '<th style="border:1px solid #000;padding:4px 6px;font-size:10pt;width:25%">Cargo / Dependencia</th>'+
-      '<th style="border:1px solid #000;padding:4px 6px;font-size:10pt;width:25%">Correo Electrónico</th>'+
-      '<th style="border:1px solid #000;padding:4px 6px;font-size:10pt;width:20%">Firma</th></tr>'+
+    '<p style="margin-top:12px;font-weight:bold;font-size:11pt;text-align:center">ASISTENTES</p>'+
+    '<table style="border-collapse:collapse;width:19.29cm">'+
+    '<colgroup><col style="width:5cm"><col style="width:5cm"><col style="width:5.83cm"><col style="width:3.46cm"></colgroup>'+
     '<tr>'+
-      '<td style="border:1px solid #000;padding:12px 6px;font-size:10pt">'+esc(I.contratista)+'</td>'+
-      '<td style="border:1px solid #000;padding:12px 6px;font-size:10pt">'+esc(I.cargoContratista)+'</td>'+
-      '<td style="border:1px solid #000;padding:12px 6px;font-size:10pt">'+esc(I.correo)+'</td>'+
-      '<td style="border:1px solid #000;padding:12px 6px"></td></tr>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Nombre Completo</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Cargo / Dependencia</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Correo Electrónico</th>'+
+      '<th style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;font-size:11pt">Firma</th></tr>'+
+    '<tr>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt;font-size:11pt">'+esc(I.contratista)+'</td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt;font-size:11pt">'+esc(I.cargoContratista)+'</td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt;font-size:11pt">'+esc(I.correo)+'</td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt"></td></tr>'+
     (I.reviso?'<tr>'+
-      '<td style="border:1px solid #000;padding:12px 6px;font-size:10pt">'+esc(I.reviso)+'</td>'+
-      '<td style="border:1px solid #000;padding:12px 6px;font-size:10pt">'+esc(I.cargoReviso)+'</td>'+
-      '<td style="border:1px solid #000;padding:12px 6px"></td>'+
-      '<td style="border:1px solid #000;padding:12px 6px"></td></tr>':'')+
+      '<td style="border:1pt solid #000;padding:12pt 6pt;font-size:11pt">'+esc(I.reviso)+'</td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt;font-size:11pt">'+esc(I.cargoReviso)+'</td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt"></td>'+
+      '<td style="border:1pt solid #000;padding:12pt 6pt"></td></tr>':'')+
     '</table>'+
 
-    '<p style="margin-top:12px;font-size:10pt;text-align:justify">El presente informe técnico '+
+    '<p style="margin-top:12px;font-size:11pt;text-align:justify">El presente informe técnico '+
       'se expide en cumplimiento del numeral 5 de la Cláusula 3 del Contrato '+
       esc(I.contratoCorto)+', como soporte para el trámite de pago de honorarios '+
       'correspondiente al periodo de '+perStr+'. Expedido en Yopal, Casanare, el '+hoy+'.</p>'+
 
-    /* ===== PIE institucional ===== */
-    '<p style="margin-top:16px;border-top:1px solid #000;padding-top:5px;font-size:8pt;'+
-      'text-align:center;color:#333">Carrera 20 No. 8-02, piso 5 CAD · Tel. 6336339, '+
-      'Ext. 1550-1551 · Yopal, Casanare · www.casanare.gov.co · '+
-      'talentohumano@casanare.gov.co</p>'+
+    '</div>'+
 
-    '</div></body></html>';
+    /* Encabezado de página, repetido en todas las hojas.
+       Anchos del original: 3,38 cm el escudo y 15,44 cm el bloque de control. */
+    '<div style="mso-element:header" id="h1">'+
+      '<table style="border-collapse:collapse;width:18.82cm">'+
+      '<colgroup><col style="width:3.38cm"><col style="width:15.44cm"></colgroup>'+
+      '<tr>'+
+        '<td style="border:1pt solid #000;padding:3pt;text-align:center;vertical-align:middle">'+
+          '<img src="'+ESCUDO_B64+'" style="width:72px;height:auto" alt="Gobernación de Casanare"></td>'+
+        '<td style="border:1pt solid #000;padding:3pt 6pt;vertical-align:middle">'+
+          '<p style="text-align:right;font-size:11pt;font-weight:bold;margin:0">ACTA RESUMEN</p>'+
+          '<p style="text-align:right;font-size:11pt;margin:0">FO-GD-11</p>'+
+          '<p style="text-align:right;font-size:11pt;margin:0">19-09-2024</p>'+
+          '<p style="text-align:right;font-size:11pt;margin:0">V. 05</p>'+
+        '</td>'+
+      '</tr></table>'+
+    '</div>'+
+
+    '<div style="mso-element:footer" id="f1">'+
+      '<p style="text-align:center;font-size:8pt;margin:0">'+
+      'Carrera 20 No. 8-02, piso 5 CAD, Tel. 6336339, Ext. 1550-1551, Yopal, Casanare · '+
+      'www.casanare.gov.co – talentohumano@casanare.gov.co</p>'+
+    '</div>'+
+
+    '</body></html>';
 
   var blob=new Blob(['\ufeff'+html],{type:'application/msword;charset=utf-8'});
   var a=document.createElement('a');
@@ -2203,11 +2208,11 @@ function exportInformeWord(){
       col:h.sev==='CRÍTICO'?'#DC2626':h.sev==='ALTO'?'#D97706':h.sev==='MODERADO'?'#2563EB':'#059669'};
   });
 
-  function tr(cells,bg){return '<tr style="background:'+(bg||'#fff')+'">'+ cells.map(function(c){return '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-size:11pt">'+c+'</td>';}).join('') +'</tr>';}
+  function tr(cells,bg){return '<tr style="background:'+(bg||'#fff')+'">'+ cells.map(function(c){return '<td style="border:1pt solid #000;padding:6px 8px;font-size:11pt">'+c+'</td>';}).join('') +'</tr>';}
     /* Los encabezados son cortos: se impide su partición en dos renglones. */
   function th(cells,bg){return '<tr>'+ cells.map(function(c){
-    return '<th style="background:'+(bg||'#1A3557')+';color:#fff;border:1px solid #CBD5E1;'+
-      'padding:5pt 6pt;font-size:10pt;text-align:left;white-space:nowrap">'+c+'</th>';
+    return '<th style="background:'+(bg||'#1A3557')+';color:#fff;border:1pt solid #000;'+
+      'padding:5pt 6pt;font-size:11pt;text-align:left;white-space:nowrap">'+c+'</th>';
   }).join('') +'</tr>';}
 
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8">'+
@@ -2223,10 +2228,10 @@ function exportInformeWord(){
     'h2{color:#2563A8;font-size:11.5pt;margin:12pt 0 5pt;text-align:left}'+
     'h3{color:#374151;font-size:11pt;margin:9pt 0 4pt;text-align:left}'+
     /* Ancho automático: con reparto fijo los encabezados se parten. */
-    'table{width:100%;border-collapse:collapse;margin:7pt 0;font-size:10pt}'+
+    'table{width:100%;border-collapse:collapse;margin:8pt 0;font-size:11pt}'+
     'td,th{text-align:left;vertical-align:top;word-wrap:break-word}'+
     'p{margin:5pt 0;text-align:justify}'+
-    '.kpi{display:inline-block;background:#F2F5FA;border-left:3pt solid #1A3557;'+
+    '.kpi{display:inline-block;border-left:3pt solid #1A3557;'+
       'padding:5pt 9pt;margin:3pt;min-width:145px;text-align:left}'+
     '.sev-c{color:#DC2626;font-weight:bold}.sev-a{color:#D97706;font-weight:bold}'+
     '.sev-m{color:#2563EB;font-weight:bold}.sev-i{color:#059669;font-weight:bold}'+
@@ -2237,11 +2242,11 @@ function exportInformeWord(){
     '<p style="text-align:center;margin:0 0 8pt">'+
       '<img src="'+LOGO_FULL_B64+'" style="width:6.5cm;height:auto" alt="Eduardo Acero — Contador Público"></p>'+
     '<p style="text-align:center;font-size:13pt;font-weight:bold;color:#1A3557;margin:0">GOBERNACIÓN DE CASANARE</p>'+
-    '<p style="text-align:center;color:#6B7280;font-size:10pt;margin:2pt 0 14pt">NIT 892.099.216 · Dirección de Talento Humano</p>'+
+    '<p style="text-align:center;color:#6B7280;font-size:11pt;margin:2pt 0 14pt">NIT 892.099.216 · Dirección de Talento Humano</p>'+
     '<p style="text-align:center;font-size:16pt;font-weight:bold;color:#1A3557;margin:0">INFORME DE AUDITORÍA DE NÓMINA</p>'+
     '<p style="text-align:center;font-size:12pt;color:#2563A8;margin:4pt 0 12pt">'+esc(regTxt)+' — Período: '+perStr+'</p>'+
     '<p style="text-align:center;font-size:13pt;font-weight:bold;color:'+niv[1]+';margin:0 0 12pt">Calificación general: '+pond.toFixed(1)+'/100 — '+niv[0]+'</p>'+
-    '<p style="text-align:center;color:#9CA3AF;font-size:9pt;margin:0 0 6pt;'+
+    '<p style="text-align:center;color:#9CA3AF;font-size:11pt;margin:0 0 6pt;'+
       'border-bottom:1px solid #CBD5E1;padding-bottom:10pt">Fecha de emisión: '+
       new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'})+
       ' · Sistema: KactuS (Ophelia Digital Ware) · Herramienta: App Revisión Nómina v5</p>'+
@@ -2257,8 +2262,8 @@ function exportInformeWord(){
       tr(['Retención en la fuente',rows.length,ret.p1+ret.p2,ret.rev,CALIF[3].n+'/100'])+
       tr(['Prestaciones sociales',rows.length,'—','—','70/100'],'#F2F5FA')+
       tr(['Trazabilidad y control',rows.length,rows.length,'0','90/100'])+
-      '<tr><td colspan="4" style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold;background:#1A3557;color:#fff">CALIFICACIÓN PONDERADA TOTAL</td>'+
-      '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;font-size:12pt">'+pond.toFixed(1)+'/100 — '+niv[0]+'</td></tr>'+
+      '<tr><td colspan="4" style="border:1pt solid #000;padding:6px 8px;font-weight:bold;background:#1A3557;color:#fff">CALIFICACIÓN PONDERADA TOTAL</td>'+
+      '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;font-size:12pt">'+pond.toFixed(1)+'/100 — '+niv[0]+'</td></tr>'+
     '</table>'+
 
     '<h1>2. Cifras de la nómina</h1>'+
@@ -2269,25 +2274,25 @@ function exportInformeWord(){
      ['Empleados activos',String(rows.length),'#1A3557'],
      ['Con vacaciones',String(ind.VACACIONES||0),'#D97706'],
      ['Con incapacidad',String(ind.INCAPACIDAD||0),'#DC2626']].map(function(k){
-      return '<td width="25%" style="background:#F2F5FA;border-left:3pt solid #1A3557;'+
-        'padding:6pt 8pt;vertical-align:top">'+
-        '<div style="font-size:9pt;color:#6B7280">'+k[0]+'</div>'+
+      return '<td width="25%" style="border-left:3pt solid #1A3557;'+
+        'padding:4pt 6pt;vertical-align:top">'+
+        '<div style="font-size:11pt;color:#6B7280">'+k[0]+'</div>'+
         '<div style="font-size:12pt;font-weight:bold;color:'+k[2]+';white-space:nowrap">'+k[1]+'</div></td>';
      }).join('')+
     '</tr></table>'+
 
     '<h1>3. Hallazgos y observaciones</h1>'+
     '<p>Se identificaron <strong>'+hallazgos.length+' hallazgos</strong>. Cada hallazgo incluye descripción, sustento normativo y recomendación de mejora.</p>'+
-    '<table width="100%"><colgroup><col style="width:6%"><col style="width:15%"><col style="width:33%"><col style="width:33%"><col style="width:13%"></colgroup>'+
-      th(['N°','Módulo','Hallazgo','Recomendación','Severidad'])+
+    '<table width="100%"><colgroup><col style="width:1.2cm"><col style="width:2.8cm"><col style="width:5.6cm"><col style="width:5.6cm"><col style="width:2.4cm"></colgroup>'+
+      th(['Ítem','Módulo','Hallazgo','Recomendación','Severidad'])+
       hallazgos.map(function(h,i){
         var sevClass='sev-'+h.sev[0].toLowerCase();
-        return '<tr style="background:'+(i%2===0?'#F2F5FA':'#fff')+'">'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold;text-align:center;white-space:nowrap\">'+(i+1)+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold">'+h.mod+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-size:10pt">'+h.hall+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-size:10pt">'+h.rec+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold;color:'+h.col+';text-align:center">'+h.sev+'</td>'+
+        return '<tr style="background:'+'#fff'+'">'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold;text-align:center;white-space:nowrap\">'+(i+1)+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold">'+h.mod+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-size:11pt">'+h.hall+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-size:11pt">'+h.rec+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold;color:'+h.col+';text-align:center">'+h.sev+'</td>'+
         '</tr>';
       }).join('')+
     '</table>'+
@@ -2306,20 +2311,20 @@ function exportInformeWord(){
         '<table width="100%"><colgroup><col style="width:26%"><col style="width:7%"><col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:13%"></colgroup>'+
         th(['Servidor','Días','Base formato','Base aplicada','Dif. base','Dif. sueldo','Dif. prima'])+
         V.lista.map(function(v,i){
-          return '<tr style="background:'+(i%2===0?'#F2F5FA':'#fff')+'">'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt">'+esc(v.nombre)+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:center">'+v.dias+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right">'+cop(v.baseFormato)+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right">'+cop(v.baseKactus)+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right">'+cop(v.difBase)+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right">'+cop(v.difSuel)+'</td>'+
-            '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right">'+cop(v.difPrima)+'</td>'+
+          return '<tr style="background:'+'#fff'+'">'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt">'+esc(v.nombre)+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:center">'+v.dias+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right">'+cop(v.baseFormato)+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right">'+cop(v.baseKactus)+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right">'+cop(v.difBase)+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right">'+cop(v.difSuel)+'</td>'+
+            '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right">'+cop(v.difPrima)+'</td>'+
           '</tr>';
         }).join('')+
         '<tr style="background:#1A3557;color:#fff">'+
-        '<td colspan="5" style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt"><b>TOTALES</b></td>'+
-        '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right"><b>'+cop(V.tot.suel)+'</b></td>'+
-        '<td style="border:1px solid #CBD5E1;padding:5px 7px;font-size:10pt;text-align:right"><b>'+cop(V.tot.prima)+'</b></td></tr>'+
+        '<td colspan="5" style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt"><b>TOTALES</b></td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right"><b>'+cop(V.tot.suel)+'</b></td>'+
+        '<td style="border:1pt solid #000;padding:4pt 6pt;font-size:11pt;text-align:right"><b>'+cop(V.tot.prima)+'</b></td></tr>'+
         '</table>'+
         '<p><b>Verificación practicada:</b> en la totalidad de los casos la prima de vacaciones '+
         'pagada equivale al sueldo en vacaciones multiplicado por 15 y dividido entre los días de '+
@@ -2339,18 +2344,18 @@ function exportInformeWord(){
       th(['Módulo','Peso %','Nota /100','Ponderado','Nivel'])+
       CALIF.map(function(m,i){
         var nl=nivel(m.n);
-        return '<tr style="background:'+(i%2===0?'#F2F5FA':'#fff')+'">'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold">'+m.m+'<br><span style="font-weight:400;font-size:9pt;color:#6B7280">'+esc(m.crit||'')+'</span></td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;text-align:center">'+(m.p*100)+'%</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;text-align:center;font-weight:bold;color:'+nl[1]+'">'+m.n+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;text-align:center">'+(m.n*m.p).toFixed(1)+'</td>'+
-          '<td style="border:1px solid #CBD5E1;padding:6px 8px;font-weight:bold;color:'+nl[1]+'">'+nl[0]+'</td>'+
+        return '<tr style="background:'+'#fff'+'">'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold">'+m.m+'<br><span style="font-weight:400;font-size:11pt;color:#6B7280">'+esc(m.crit||'')+'</span></td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;text-align:center">'+(m.p*100)+'%</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;text-align:center;font-weight:bold;color:'+nl[1]+'">'+m.n+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;text-align:center">'+(m.n*m.p).toFixed(1)+'</td>'+
+          '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold;color:'+nl[1]+'">'+nl[0]+'</td>'+
         '</tr>';
       }).join('')+
-      '<tr><td colspan="2" style="border:1px solid #CBD5E1;padding:7px 8px;font-weight:bold;background:#1A3557;color:#fff">CALIFICACIÓN PONDERADA TOTAL</td>'+
-      '<td style="border:1px solid #CBD5E1;padding:7px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center;font-size:13pt">'+pond.toFixed(1)+'</td>'+
-      '<td style="border:1px solid #CBD5E1;padding:7px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center">'+pond.toFixed(1)+'</td>'+
-      '<td style="border:1px solid #CBD5E1;padding:7px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center">'+niv[0]+'</td></tr>'+
+      '<tr><td colspan="2" style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;background:#1A3557;color:#fff">CALIFICACIÓN PONDERADA TOTAL</td>'+
+      '<td style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center;font-size:13pt">'+pond.toFixed(1)+'</td>'+
+      '<td style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center">'+pond.toFixed(1)+'</td>'+
+      '<td style="border:1pt solid #000;padding:4pt 6pt;font-weight:bold;background:'+niv[1]+';color:#fff;text-align:center">'+niv[0]+'</td></tr>'+
     '</table>'+
 
     '<h1>6. Plan de mejoras</h1>'+
@@ -2364,22 +2369,22 @@ function exportInformeWord(){
 
     '<h1>7. Firmas</h1>'+
     '<table style="margin-top:40px"><tr>'+
-      '<td style="width:45%;text-align:center;border:1px solid #CBD5E1;padding:40px 20px">'+
-        '<p style="font-size:9pt;color:#6B7280">Elaboró</p>'+
+      '<td style="width:45%;text-align:center;border:1pt solid #000;padding:40px 20px">'+
+        '<p style="font-size:11pt;color:#6B7280">Elaboró</p>'+
         '<div style="border-bottom:1px solid #374151;margin:30px 20px 8px"></div>'+
         '<p style="font-weight:bold">'+(I.elaboro||'_____________________')+'</p>'+
-        '<p style="font-size:9pt;color:#374151">'+esc(I.cargoElaboro)+'</p>'+
-        '<p style="font-size:9pt;color:#6B7280">Gobernación de Casanare</p>'+
-        '<p style="font-size:9pt;color:#6B7280">Fecha: '+new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'})+'</p>'+
+        '<p style="font-size:11pt;color:#374151">'+esc(I.cargoElaboro)+'</p>'+
+        '<p style="font-size:11pt;color:#6B7280">Gobernación de Casanare</p>'+
+        '<p style="font-size:11pt;color:#6B7280">Fecha: '+new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'})+'</p>'+
       '</td>'+
       '<td style="width:10%"></td>'+
-      '<td style="width:45%;text-align:center;border:1px solid #CBD5E1;padding:40px 20px">'+
-        '<p style="font-size:9pt;color:#6B7280">Revisó</p>'+
+      '<td style="width:45%;text-align:center;border:1pt solid #000;padding:40px 20px">'+
+        '<p style="font-size:11pt;color:#6B7280">Revisó</p>'+
         '<div style="border-bottom:1px solid #374151;margin:30px 20px 8px"></div>'+
         '<p style="font-weight:bold">'+(I.reviso||'_____________________')+'</p>'+
-        '<p style="font-size:9pt;color:#374151">'+esc(I.cargoReviso)+'</p>'+
-        '<p style="font-size:9pt;color:#6B7280">Gobernación de Casanare</p>'+
-        '<p style="font-size:9pt;color:#6B7280">Fecha: _____________________</p>'+
+        '<p style="font-size:11pt;color:#374151">'+esc(I.cargoReviso)+'</p>'+
+        '<p style="font-size:11pt;color:#6B7280">Gobernación de Casanare</p>'+
+        '<p style="font-size:11pt;color:#6B7280">Fecha: _____________________</p>'+
       '</td>'+
     '</tr></table>'+
     '<p style="font-size:8pt;color:#9CA3AF;text-align:center;margin-top:24px;border-top:1px solid #E5E7EB;padding-top:8px">'+
@@ -2847,6 +2852,159 @@ function exportXlsx(){
     },
     anchos:[42,16,12,46]
   }), 'PARÁMETROS');
+
+  /* ═══════════ 2b. GUÍA PASO A PASO ═══════════ */
+  var topeRE=(790/P.n790)*P.uvt;
+  var gu=[
+    ['GUÍA METODOLÓGICA — AUDITORÍA DE NÓMINA '+perStr.toUpperCase()+' · '+regTxt.toUpperCase()],
+    ['Explica cómo se verifica cada componente, de dónde sale cada cifra y dónde suelen originarse los errores.'],
+    ['Celdas AMARILLAS = entradas a diligenciar. Texto VERDE = valor que viene de otra hoja. NEGRO = calculado aquí.'],
+    [''],
+    ['CÓMO ESTÁ ARMADO EL LIBRO'],
+    ['DATOS PRENÓMINA es la única hoja con datos duros: es lo leído del PDF de KACTUS. Todo lo demás son'],
+    ['fórmulas que la leen. Las tarifas y topes viven en PARÁMETROS, así que al cambiar el SMLMV o la UVT'],
+    ['el libro entero se recalcula sin tocar una sola celda de cálculo.'],
+    [''],
+    ['LAS TRES BASES Y SUS PROTOTIPOS'],
+    ['Cada base se construye sumando explícitamente los conceptos del prototipo que la rige. No se usa'],
+    ['"devengado total menos algo": ese atajo produce diferencias falsas, como se explica más abajo.'],
+    [''],
+    ['  Prototipo 101 — IBC de seguridad social (15 conceptos)'],
+    ['     101 Sueldo · 102 Gastos de representación · 114 Bonificación por servicios · 146 Ajuste sueldo'],
+    ['     Determina salud, pensión, Fondo de Solidaridad Pensional y ARL.'],
+    [''],
+    ['  Prototipo 102 — Base de retención en la fuente (42 conceptos)'],
+    ['     SUMAN: 101 · 107 Vacaciones · 108 Prima vacaciones · 155 Bonif. recreación · 114 · 146'],
+    ['            104 Auxilio transporte · 139/141/148 Incapacidades · 143 Lic. maternidad · 118 Indemnización'],
+    ['     RESTAN: 500 Salud · 501 Pensión · 502 FSP · 527 Subsistencia · 550 AFC'],
+    ['     EXCLUIDOS: 102 Gastos de representación y 119 Bonificación de dirección.'],
+    [''],
+    ['  Prototipo 159 — Base de aportes parafiscales (38 conceptos)'],
+    ['     Base más amplia: incluye vacaciones, primas, incapacidades, licencias, auxilio de transporte'],
+    ['     e indemnizaciones. Excluye únicamente el concepto 119.'],
+    [''],
+    ['① IBC DE SEGURIDAD SOCIAL — salud 4%, pensión 4%, FSP escalonado'],
+    ['PASO 1. IBC del mes = suma de los conceptos del Prototipo 101.'],
+    ['PASO 2. Si hay NOVEDAD (vacaciones, incapacidad o licencia), el IBC del mes queda distorsionado'],
+    ['        porque el sueldo se reemplaza por el pago de la novedad. En ese caso se toma el IBC del'],
+    ['        MES INMEDIATAMENTE ANTERIOR (artículo 1 del Decreto 1406 de 1999 y doctrina UGPP).'],
+    ['        IBC aplicable = SI(novedad Y existe IBC anterior ; IBC anterior ; IBC del mes)'],
+    ['PASO 3. Piso y tope. El piso de un salario mínimo se PRORRATEA según los días efectivamente'],
+    ['        cotizados: aplicarlo completo a quien laboró media quincena infla el IBC. El tope es de'],
+    ['        25 SMLMV = '+cop(25*P.smlmv)+' (artículo 5 de la Ley 797 de 2003).'],
+    ['PASO 4. Fondo de Solidaridad Pensional, escalonado y por subcuentas:'],
+    ['        menos de 4 SMLMV: 0% · de 4 a 16: 1% · 16-17: 1,2% · 17-18: 1,4% · 18-19: 1,6%'],
+    ['        19-20: 1,8% · más de 20: 2%. El 1% va a Solidaridad; el excedente, a Subsistencia.'],
+    [''],
+    ['DÓNDE SE ORIGINAN LOS ERRORES EN SEGURIDAD SOCIAL'],
+    ['  · Cotizar sobre el devengado del mes cuando hay novedad, en vez del IBC del mes anterior.'],
+    ['    Es la causa más frecuente. Por eso la app bloquea la entrega si falta ese histórico.'],
+    ['  · Aplicar el piso de un salario mínimo completo en liquidaciones parciales.'],
+    ['  · Reajustes retroactivos: si el mes anterior ya incorporó el aumento y la novedad se liquidó'],
+    ['    con el IBC viejo, la diferencia aparece como cotización de menos.'],
+    [''],
+    ['② APORTES PARAFISCALES — CCF 4%, SENA 0,5%, ICBF 3%, ESAP 0,5%, MEN 1%'],
+    ['Base = suma de los conceptos del Prototipo 159.'],
+    ['NO se aplica el tope de 25 SMLMV: ese tope es propio de la seguridad social. Los parafiscales'],
+    ['se liquidan sobre la nómina total (Ley 21 de 1982 y Ley 89 de 1988).'],
+    ['El sector público NO está exonerado de SENA e ICBF: la exoneración del artículo 114-1 del E.T.'],
+    ['aplica a empleadores privados y a sociedades, no a las entidades territoriales.'],
+    [''],
+    ['COLUMNAS DE CONTRASTE: el libro calcula la base por el Prototipo 159 y, al lado, por el criterio'],
+    ['anterior (devengado menos auxilio de transporte). La diferencia cuantifica el efecto del cambio.'],
+    [''],
+    ['③ BONIFICACIÓN POR SERVICIOS PRESTADOS — Decreto 0320 de 2026'],
+    ['PASO 1. Base = asignación básica (101) + gastos de representación (102).'],
+    ['PASO 2. Porcentaje según la base: '+(P.bspT1*100).toFixed(0)+'% si es menor o igual a '+cop(P.bspBase)+';'],
+    ['        '+(P.bspT2*100).toFixed(0)+'% si la supera. Se compara contra el concepto 114 liquidado.'],
+    ['ERROR TÍPICO: aplicar el porcentaje del tramo equivocado cuando la base queda cerca del límite.'],
+    [''],
+    ['④ RETENCIÓN EN LA FUENTE — Procedimiento 1 (artículos 383, 387 y 388 del E.T.)'],
+    ['PASO 1. Ingresos brutos = suma de los conceptos que SUMAN del Prototipo 102.'],
+    ['PASO 2. Restar los aportes obligatorios efectivamente descontados (500 + 501 + 502).'],
+    ['PASO 3. Restar las deducciones del artículo 387 que el servidor haya certificado:'],
+    ['        salud prepagada, tope 16 UVT = '+cop(16*P.uvt)+'; dependientes, 10% del ingreso con tope'],
+    ['        de 32 UVT = '+cop(32*P.uvt)+'.'],
+    ['PASO 4. Restar el 25% de renta exenta (artículo 206 numeral 10), con tope mensual de'],
+    ['        '+cop(topeRE)+' (790 UVT anuales prorrateadas).'],
+    ['PASO 5. Convertir la base gravable a UVT ('+cop(P.uvt)+') y aplicar la tabla del artículo 383.'],
+    ['        El resultado se aproxima al múltiplo de mil más cercano (artículo 577 del E.T.).'],
+    [''],
+    ['⑤ RETENCIÓN — Procedimiento 2 (artículo 386 del E.T.)'],
+    ['El porcentaje fijo se determina en diciembre con el acumulado de los doce meses anteriores y rige'],
+    ['por el semestre. El libro lo recalcula así:'],
+    ['   1) Base gravable anual = ingresos gravables acumulados, depurados.'],
+    ['   2) Ingreso mensual promedio = base anual ÷ 13 (doce meses más la prima).'],
+    ['   3) % fijo = retención del promedio según la tabla 383, dividida por ese promedio.'],
+    ['   4) Retención del mes = base gravable × % fijo.'],
+    ['La columna "¿Ret. OK?" marca conforme por P2, conforme por P1, o a revisar, con tolerancia de'],
+    [cop(5000)+'.'],
+    [''],
+    ['CÓMO SABER QUÉ MÉTODO USÓ EL SISTEMA'],
+    ['El campo CANTIDAD del concepto 513 en el PDF lo revela: un valor decimal (por ejemplo 5,41) es el'],
+    ['porcentaje fijo del Procedimiento 2; un valor entero de la serie 19, 28, 33, 35, 37 o 39 es la'],
+    ['tarifa marginal del artículo 383, es decir Procedimiento 1.'],
+    [''],
+    ['DÓNDE SE ORIGINAN LOS ERRORES EN RETENCIÓN'],
+    ['  · Base inflada: si se suman los conceptos 500, 501 y 502 como ingreso en lugar de restarlos,'],
+    ['    la base queda cerca de un 9% por encima. Es un error de parametrización, no de cálculo.'],
+    ['  · Tope de renta exenta no aplicado: si el 25% se implementa como multiplicador plano, el límite'],
+    ['    de 790 UVT anuales no tiene dónde operar y se produce defecto de retención en salarios altos.'],
+    ['  · Deducciones del artículo 387 no descontadas: si el servidor tiene medicina prepagada o'],
+    ['    dependientes certificados y no se restan, se le retiene de más.'],
+    ['  · Meses con vacaciones o liquidación: el pico de ingresos dispara la retención por Procedimiento 1.'],
+    ['    El Procedimiento 2 existe precisamente para suavizar ese efecto.'],
+    [''],
+    ['⑥ CONTROL DE DESCUENTOS'],
+    ['Tres límites distintos, que no deben confundirse:'],
+    ['   Embargo de alimentos — hasta el 50% del salario (artículo 156 del C.S.T.).'],
+    ['   Embargo civil o comercial — una quinta parte del exceso sobre el salario mínimo (artículo 155).'],
+    ['   Libranzas y descuentos voluntarios — la suma con las deducciones de ley no puede superar el 50%'],
+    ['   del neto (artículo 3 de la Ley 1527 de 2012).'],
+    ['Se aplica una tolerancia de '+cop(1000)+' porque los topes dan cifras con decimales y el sistema'],
+    ['redondea: sin ella aparecen excesos que no existen.'],
+    [''],
+    ['⑦ CRUCE CON LA PLANILLA PILA'],
+    ['Cargue la planilla en la pestaña PILA de la aplicación. El cruce compara registro por registro el'],
+    ['IBC de salud, pensión, ARL y CCF, y los aportes, con tolerancia de '+cop(2000)+'.'],
+    ['Lo más relevante no son las diferencias de centavos sino los servidores que están en la nómina y'],
+    ['no en la planilla, o al revés: eso significa alguien sin cotizar.'],
+    [''],
+    ['⑧ NOVEDADES QUE ALTERAN EL IBC'],
+    ['La hoja NOVEDADES aísla los casos y muestra el IBC del mes anterior, el del mes, el aplicado y el'],
+    ['efecto sobre la cotización. Conceptos que disparan la regla:'],
+    ['   107 Vacaciones · 139, 141 y 148 Incapacidades · 143 Licencia de maternidad'],
+    ['   196 Licencia de paternidad · 602 Licencia remunerada'],
+    [''],
+    ['CÓMO ACTUALIZAR PARA EL MES SIGUIENTE'],
+    ['1. Archive el mes que acaba de auditar en la pestaña Histórico de la aplicación.'],
+    ['2. Cargue la prenómina del nuevo período. El IBC del mes anterior se aplicará solo.'],
+    ['3. Verifique en PARÁMETROS que el SMLMV y la UVT correspondan a la vigencia.'],
+    ['4. Cargue la planilla PILA y, si hubo ingresos o retiros, las novedades de planta.'],
+    ['5. Revise los hallazgos en Elaborar informe y marque la casilla de revisión.'],
+    ['6. La verificación previa le dirá si puede entregar. No la omita.'],
+    [''],
+    ['ADVERTENCIA'],
+    ['Esta herramienta apoya el criterio profesional; no lo reemplaza. Antes de fundamentar un hallazgo'],
+    ['o una decisión administrativa, contraste el resultado contra los soportes documentales.']
+  ];
+  XLSX.utils.book_append_sheet(wb, pintar(XLSX.utils.aoa_to_sheet(gu),{
+    estilo:function(R,C,cel){
+      if(R===0) return estTitulo(13);
+      if(R===1||R===2) return estSubtitulo();
+      var v=String(cel.v||'');
+      /* Títulos de sección: numerales circulados o renglones en mayúsculas */
+      if(/^[①②③④⑤⑥⑦⑧]/.test(v)) return estSeccion(XS.secIBC);
+      if(/^[A-ZÁÉÍÓÚÑ0-9 ,.()—–-]{14,}$/.test(v) && v===v.toUpperCase())
+        return estSeccion(XS.secConcep);
+      if(/^PASO \d/.test(v.trim()))
+        return estDato({al:'left',bold:true,wrap:true});
+      if(/^ {2}·|^ {2}Prototipo|^ {3}/.test(v))
+        return estDato({al:'left',wrap:true,color:XS.txtVinculado});
+      return estDato({al:'left',wrap:true});
+    },
+    anchos:[112]
+  }), 'GUÍA PASO A PASO');
 
   /* ═══════════ 3. DATOS PRENÓMINA (única hoja con datos duros) ═══════════ */
   var dp=[
@@ -3721,7 +3879,7 @@ function alertasResumen(C,n){
 function vDetalle(){
   var dd=(S.data&&S.data.descuadres)||[];
   var avisoCruce = dd.length ?
-    '<div class="section" style="border-left:4px solid #DC2626">'+
+    '<div class="section" data-cruce="1" style="border-left:4px solid #DC2626">'+
       '<h2 style="color:#DC2626">⚠ Cruce de datos detectado en el PDF</h2>'+
       '<div class="info-box" style="border-left-color:#DC2626">'+
         'Los conceptos capturados para estos servidores no cuadran contra su propia línea '+
@@ -4509,8 +4667,10 @@ function vNovedades(){
   return '<div class="section">'+
     '<h2>Novedades de planta · '+esc(perStr)+'</h2>'+
     '<div class="info-box">'+
-      'Pegue las novedades administrativas del período. La app cruza cada una contra la nómina '+
-      'liquidada y verifica que los días correspondan a la fecha de ingreso o retiro.<br>'+
+      '<b>Esta pestaña solo aplica si en el período hubo ingresos o retiros.</b> '+
+      'Si la planta no tuvo movimientos, déjela vacía: no es obligatoria para generar los informes.<br>'+
+      'Cuando sí los haya, pegue las novedades y la app cruza cada una contra la nómina '+
+      'liquidada para verificar que los días correspondan a la fecha de ingreso o retiro.<br>'+
       '<b>Formato:</b> una línea por servidor, precedida de un encabezado que diga '+
       '<i>LIQUIDACION DEFINITIVA</i> o <i>INGRESO</i>.<br>'+
       '<span style="color:#7A6D63">Ejemplo: <code>6/08/2026  DIEGO ALEXANDER CALDERON BEJARANO C.C. 1.118.537.674 DIRECTOR DE CALIDAD</code></span>'+
@@ -4541,12 +4701,15 @@ function vNovedades(){
  * ======================================================================= */
 function verificarEntrega(){
   var v=[];
-  function add(nivel,control,detalle,accion){
-    v.push({nivel:nivel,control:control,detalle:detalle,accion:accion||''});
+  /* 'ir' indica a qué pestaña debe llevar el botón de corrección, y
+     'foco' si además hay que activar un filtro al llegar. */
+  function add(nivel,control,detalle,accion,ir,foco){
+    v.push({nivel:nivel,control:control,detalle:detalle,accion:accion||'',
+            ir:ir||'',foco:foco||''});
   }
   if(!S.computed){
     add('BLOQUEA','Prenómina cargada','No hay ninguna nómina procesada.',
-      'Cargue el PDF de prenómina en la barra superior.');
+      'Cargue el PDF de prenómina en la barra superior.','resumen');
     return v;
   }
   var C=S.computed, P=S.P, rows=C.rows, N=rows.length;
@@ -4559,7 +4722,8 @@ function verificarEntrega(){
       dd.length+' servidor(es) con conceptos que no cuadran contra su TOTAL '+
       'IDENTIFICACION del PDF: '+dd.slice(0,3).map(function(m){return m.nombre;}).join(', ')+
       (dd.length>3?' y otros':'')+'.',
-      'Revise la pestaña Empleados. Se le atribuyeron conceptos de otro servidor.');
+      'Revise la tabla de descuadres: muestra cuánto dinero ajeno absorbió cada uno.',
+      'detalle','cruce');
   } else {
     add('OK','Integridad de la lectura',
       'Los '+N+' bloques del PDF cuadran contra su propio total.');
@@ -4569,7 +4733,7 @@ function verificarEntrega(){
   if(!per||!per.mes||!per.anio){
     add('BLOQUEA','Período identificado',
       'No se pudo leer el período en el PDF.',
-      'Sin período no se puede archivar el mes ni titular los informes.');
+      'Sin período no se puede archivar el mes ni titular los informes.','resumen');
   } else {
     add('OK','Período identificado',
       ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto',
@@ -4584,7 +4748,7 @@ function verificarEntrega(){
       sinIBC.length+' de '+conNov.length+' servidores con novedad no tienen IBC del mes '+
       'anterior. Sus aportes se están calculando sobre el IBC del mes, contrario al '+
       'artículo 1 del Decreto 1406 de 1999.',
-      'Archive el mes anterior en la pestaña Histórico, o cargue el CSV de IBC.');
+      'Archive el mes anterior, o cargue el CSV de IBC.','historico');
   } else if(conNov.length){
     add('OK','IBC del mes anterior',
       'Los '+conNov.length+' servidores con novedad tienen IBC del mes anterior'+
@@ -4601,7 +4765,7 @@ function verificarEntrega(){
       'De '+conRet.length+' servidores con retención, '+(conRet.length-conPct.length)+
       ' no tienen porcentaje fijo legible. Se comparan contra Procedimiento 1, lo que '+
       'puede reportar diferencias que no existen.',
-      'Solicite los certificados de Procedimiento 2 y cargue la base gravable anual.');
+      'Revise los casos y solicite los certificados de Procedimiento 2.','retencion','difs');
   } else if(conRet.length){
     add('OK','Procedimiento 2',
       'Los '+conRet.length+' servidores con retención tienen método identificado.');
@@ -4618,7 +4782,7 @@ function verificarEntrega(){
     add('ADVIERTE','Conciliación PILA',
       'No se cargó la planilla ni se digitaron los totales. El módulo de parafiscales '+
       'queda sin verificar contra la fuente externa.',
-      'Cargue la planilla en la pestaña PILA o digite los totales.');
+      'Cargue la planilla o digite los totales.','pila');
   } else {
     add('OK','Conciliación PILA',
       S.pilaDet.length?('Planilla cargada con '+S.pilaDet.length+' registros.')
@@ -4635,7 +4799,7 @@ function verificarEntrega(){
   if(faltan.length){
     add('ADVIERTE','Datos del informe',
       'Faltan por diligenciar: '+faltan.join(', ')+'.',
-      'Complete los campos en esta misma pestaña antes de generar los documentos.');
+      'Complete los campos señalados más abajo.','informe','datos');
   } else {
     add('OK','Datos del informe','Datos del auditor y del contrato completos.');
   }
@@ -4644,13 +4808,13 @@ function verificarEntrega(){
   if(!I.hallazgos.length){
     add('BLOQUEA','Hallazgos',
       'No hay hallazgos en el informe.',
-      'Use "Regenerar automáticamente" o agréguelos manualmente.');
+      'Use "Regenerar automáticamente" o agréguelos manualmente.','informe','hallazgos');
   } else if(!I.revisado){
     add('ADVIERTE','Hallazgos',
       'Los '+I.hallazgos.length+' hallazgos se generaron de forma automática y no se han '+
       'marcado como revisados. Un hallazgo no verificado puede sustentar una decisión '+
       'administrativa equivocada.',
-      'Léalos, ajústelos y marque la casilla de revisión.');
+      'Léalos, ajústelos y marque la casilla de revisión.','informe','hallazgos');
   } else {
     add('OK','Hallazgos',I.hallazgos.length+' hallazgos revisados por el auditor.');
   }
@@ -4662,7 +4826,7 @@ function verificarEntrega(){
     add('BLOQUEA','Coherencia aritmética',
       'La suma de los devengados individuales ('+cop(sumaDev)+') no coincide con el total '+
       'del período ('+cop(C.tot.devArch)+').',
-      'Indica pérdida de registros en la lectura del PDF.');
+      'Indica pérdida de registros en la lectura del PDF.','detalle','cruce');
   } else {
     add('OK','Coherencia aritmética',
       'Devengado validado al peso: '+cop(C.tot.devArch)+'.');
@@ -4674,7 +4838,7 @@ function verificarEntrega(){
   if(paramViejo){
     add('BLOQUEA','Parámetros de la vigencia',
       'El SMLMV configurado ('+cop(P.smlmv)+') no corresponde al año '+anio+'.',
-      'Actualícelo en la pestaña Parámetros.');
+      'Actualícelo en Parámetros.','params');
   } else {
     add('OK','Parámetros de la vigencia',
       'SMLMV '+cop(P.smlmv)+' · UVT '+cop(P.uvt)+'.');
@@ -4684,7 +4848,7 @@ function verificarEntrega(){
   if(S.guardado.estado==='sin-almacenamiento'){
     add('ADVIERTE','Respaldo',
       'El navegador no permite guardar automáticamente. Si cierra la pestaña pierde el trabajo.',
-      'Descargue el respaldo con el botón 💾 de la barra superior.');
+      'Descargue el respaldo con el botón 💾.','resumen');
   } else {
     add('OK','Respaldo','Autoguardado activo.');
   }
@@ -4719,13 +4883,17 @@ function vVerificacion(){
     '</div>'+
     '<div class="tbl-wrap"><table class="tbl">'+
     '<thead><tr><th style="width:34px"></th><th>Control</th><th>Estado</th>'+
-    '<th>Qué hacer</th></tr></thead><tbody>'+
+    '<th>Qué hacer</th><th style="width:110px"></th></tr></thead><tbody>'+
     v.map(function(x){
+      var corregible=(x.nivel!=='OK'&&x.ir);
       return '<tr'+(x.nivel==='BLOQUEA'?' class="row-bad"':'')+'>'+
         '<td style="text-align:center;color:'+COL[x.nivel]+';font-weight:800">'+ICO[x.nivel]+'</td>'+
         '<td style="font-weight:600;white-space:nowrap">'+esc(x.control)+'</td>'+
         '<td class="td-nota">'+esc(x.detalle)+'</td>'+
         '<td class="td-nota" style="color:'+COL[x.nivel]+'">'+esc(x.accion)+'</td>'+
+        '<td>'+(corregible?
+          '<button class="btn-ir" data-ir="'+esc(x.ir)+'" data-foco="'+esc(x.foco||'')+'">'+
+          'Corregir →</button>':'')+'</td>'+
       '</tr>';
     }).join('')+
     '</tbody></table></div>'+
@@ -4784,15 +4952,16 @@ function vInforme(){
     '<h3 style="margin-top:18px">Datos contractuales <span class="h3-note">(para el Acta Resumen FO-GD-11)</span></h3>'+
     '<div class="frm-grid">'+
       '<div class="frm-f"><label>Contratista</label>'+
-        '<input class="frm-in" id="inf-contratista" value="'+esc(I.contratista)+'"></div>'+
+        '<input class="frm-in'+(S.focoCorreccion==='datos'&&!I.contratista?' frm-falta':'')+
+        '" id="inf-contratista" value="'+esc(I.contratista)+'"></div>'+
       '<div class="frm-f"><label>Cédula</label>'+
-        '<input class="frm-in" id="inf-cedula" value="'+esc(I.cedula)+'"></div>'+
+        '<input class="frm-in'+(S.focoCorreccion==='datos'&&!I.cedula?' frm-falta':'')+'" id="inf-cedula" value="'+esc(I.cedula)+'"></div>'+
       '<div class="frm-f"><label>Correo electrónico</label>'+
-        '<input class="frm-in" id="inf-correo" value="'+esc(I.correo)+'"></div>'+
+        '<input class="frm-in'+(S.focoCorreccion==='datos'&&!I.correo?' frm-falta':'')+'" id="inf-correo" value="'+esc(I.correo)+'"></div>'+
       '<div class="frm-f"><label>Cargo / Dependencia</label>'+
-        '<input class="frm-in" id="inf-cargo-ct" value="'+esc(I.cargoContratista)+'"></div>'+
+        '<input class="frm-in'+(S.focoCorreccion==='datos'&&!I.cargoContratista?' frm-falta':'')+'" id="inf-cargo-ct" value="'+esc(I.cargoContratista)+'"></div>'+
       '<div class="frm-f"><label>Contrato (corto)</label>'+
-        '<input class="frm-in" id="inf-contrato-corto" value="'+esc(I.contratoCorto)+'"></div>'+
+        '<input class="frm-in'+(S.focoCorreccion==='datos'&&!I.contratoCorto?' frm-falta':'')+'" id="inf-contrato-corto" value="'+esc(I.contratoCorto)+'"></div>'+
     '</div>'+
     '<div class="frm-f" style="margin-top:10px"><label>Contrato (texto completo)</label>'+
       '<textarea class="frm-ta" id="inf-contrato" rows="2">'+esc(I.contrato)+'</textarea></div>'+
@@ -5137,6 +5306,27 @@ function wire(){
     }
     return true;
   }
+  /* Botón "Corregir": lleva a la pestaña donde está el problema y, cuando
+     aplica, activa el filtro que aísla los casos afectados. */
+  document.querySelectorAll('[data-ir]').forEach(function(b){
+    b.onclick=function(){
+      var destino=this.dataset.ir, foco=this.dataset.foco;
+      if(foco==='difs') S.onlyDiff=true;
+      if(foco==='cruce') S.onlyDiff=false;
+      S.focoCorreccion=foco||'';
+      S.view=destino;
+      render();
+      /* Desplazar hasta el punto señalado */
+      setTimeout(function(){
+        var sel = foco==='cruce' ? '.section[data-cruce]'
+                : foco==='datos' ? '#inf-contratista'
+                : foco==='hallazgos' ? '.hall-wrap'
+                : null;
+        var el = sel?document.querySelector(sel):null;
+        if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'center'});
+      },120);
+    };
+  });
   var chkRev=qs('chk-revisado');
   if(chkRev) chkRev.onchange=function(){
     S.informe.revisado=this.checked;
@@ -5270,6 +5460,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:#F0EDE8;color:#1C1C1E;f
 .btn-elaborar:hover{background:#D96B3A}
 .btn-acta{background:#1A3557;color:#fff;border:none;padding:14px 22px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700;font-family:inherit;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25);margin-left:8px}
 .btn-acta:hover{background:#254B76}
+.frm-falta{border-color:#DC2626 !important;background:#FEF2F2;
+  box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+.hall-wrap{scroll-margin-top:20px}
+.btn-ir{background:#C45B2E;color:#fff;border:none;border-radius:5px;padding:5px 11px;
+  font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+.btn-ir:hover{background:#D96B3A}
 .btn-mini{background:none;border:1px solid #C8BFAF;color:#5A4D42;border-radius:4px;padding:2px 7px;font-size:10.5px;cursor:pointer;font-family:inherit}
 .btn-mini:hover{border-color:#C45B2E;color:#C45B2E}
 .hist-carga{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 8px}
