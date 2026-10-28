@@ -197,7 +197,7 @@ function nuevoWS(){
   return {
     data:null, computed:null,
     ibcAnt:{}, ibcMesLabel:'', fileName:'', novedades:[], novedadesTexto:'',
-    pilaDet:[], pilaArchivo:'', historico:{},
+    pilaDet:[], pilaArchivo:'', historico:{}, acumAnual:{}, acumFuente:'',
     pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
     informe:{inicializado:false, elaboro:'',
       cargoElaboro:'Profesional Universitario — Dirección de Talento Humano',
@@ -225,6 +225,7 @@ var S={
   pilaDet:[], pilaMap:null, pilaHdr:-1, pilaMatriz:null, pilaArchivo:'',
   pilaDebug:null, pilaAviso:'',
   historico:{}, histComp:'', destinoPDF:null, avisoHist:'', histLote:null,
+  acumAnual:{}, acumFuente:'',
   focoCorreccion:'',
   ibcAnt:{}, ibcMesLabel:'',
   pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
@@ -260,6 +261,7 @@ function volcarWS(reg){
   w.novedades=S.novedades; w.novedadesTexto=S.novedadesTexto;
   w.pilaDet=S.pilaDet; w.pilaArchivo=S.pilaArchivo;
   w.historico=S.historico;
+  w.acumAnual=S.acumAnual; w.acumFuente=S.acumFuente;
 }
 
 /* Carga el workspace del régimen indicado a los campos activos */
@@ -274,6 +276,7 @@ function cargarWS(reg){
   S.novedades=w.novedades||[]; S.novedadesTexto=w.novedadesTexto||'';
   S.pilaDet=w.pilaDet||[]; S.pilaArchivo=w.pilaArchivo||'';
   S.historico=w.historico||{};
+  S.acumAnual=w.acumAnual||{}; S.acumFuente=w.acumFuente||'';
 }
 
 function cambiarRegimen(nuevo){
@@ -294,7 +297,8 @@ function serializar(){
       data:w.data, ibcAnt:w.ibcAnt, ibcMesLabel:w.ibcMesLabel,
       pilaRep:w.pilaRep, informe:w.informe, fileName:w.fileName,
       novedades:w.novedades, novedadesTexto:w.novedadesTexto,
-      pilaDet:w.pilaDet, pilaArchivo:w.pilaArchivo, historico:w.historico
+      pilaDet:w.pilaDet, pilaArchivo:w.pilaArchivo, historico:w.historico,
+      acumAnual:w.acumAnual, acumFuente:w.acumFuente
       /* computed se recalcula al restaurar */
     };
   }
@@ -354,6 +358,7 @@ function aplicarEstado(d, silencioso){
       w.novedades=src.novedades||[]; w.novedadesTexto=src.novedadesTexto||'';
       w.pilaDet=src.pilaDet||[]; w.pilaArchivo=src.pilaArchivo||'';
       w.historico=src.historico||{};
+      w.acumAnual=src.acumAnual||{}; w.acumFuente=src.acumFuente||'';
     }
     S.ws[r]=w;
   });
@@ -445,11 +450,16 @@ function fspDetalle(ibc,smlmv){
   var n=ibc/smlmv;
   if(n<4) return {solidaridad:0, subsistencia:0, total:0};
   var sol=0.01, sub=0;
-  if(n>16&&n<=17)      sub=0.002;
-  else if(n<=18)       sub=0.004;
-  else if(n<=19)       sub=0.006;
-  else if(n<=20)       sub=0.008;
-  else if(n>20)        sub=0.01;
+  /* La subcuenta de subsistencia solo opera por encima de 16 SMLMV. Antes la
+     cadena de condiciones no verificaba ese límite inferior: un IBC de 5,68
+     SMLMV entraba por "n<=18" y se le aplicaba 1,4% en lugar de 1%. */
+  if(n>16){
+    if(n<=17)      sub=0.002;
+    else if(n<=18) sub=0.004;
+    else if(n<=19) sub=0.006;
+    else if(n<=20) sub=0.008;
+    else           sub=0.01;
+  }
   return {solidaridad:sol, subsistencia:sub, total:sol+sub};
 }
 function fspRate(ibc,smlmv){ return fspDetalle(ibc,smlmv).total; }
@@ -551,9 +561,17 @@ function calcEmpleado(e,P){
   dep.baseConDed=Math.max(0,(baseRet-aportesRet-d387.salud-d387.exenta)*(1-P.pctRE));
   var rP1=retP1(dep.bg,P.uvt);
 
-  /* BSP normativo según Dec. 0320/2026 */
-  var bspBase=e.c['114']||0;
-  var bspNorm=bspBase<=P.bspBase ? bspBase*P.bspT1 : P.bspBase*P.bspT1+(bspBase-P.bspBase)*P.bspT2;
+  /* Bonificación por servicios prestados — Decreto 0320 de 2026.
+     La base es la asignación básica más los gastos de representación, no el
+     concepto 114 ya liquidado: aplicarle la tarifa al propio pago es circular.
+     La tarifa es plana según el tramo, no progresiva: se verificó en la nómina
+     que el 114 pagado equivale al 38% exacto de (101+102) en los 11 casos con
+     salario superior al tope. */
+  var bspBase=(e.c['101']||0)+(e.c['102']||0);
+  /* En meses con novedad el concepto 101 viene prorrateado y la base queda
+     distorsionada; en esos casos se toma la asignación básica mensual. */
+  if(nov!=='NORMAL'&&e.salariaBasico) bspBase=e.salariaBasico+(e.c['102']||0);
+  var bspNorm=bspBase*(bspBase<=P.bspBase?P.bspT1:P.bspT2);
 
   /* ── Control de descuentos: Ley 1527/2012 y Art. 155 CST ──────────────
      Se separan tres naturalezas porque tienen límites legales distintos:
@@ -611,6 +629,78 @@ function calcEmpleado(e,P){
 }
 
 /* =========================================================================
+ * ACUMULADO ANUAL PARA EL PROCEDIMIENTO 2 (Art. 386 E.T.)
+ *
+ * El porcentaje fijo se calcula sobre la base gravable de los doce meses
+ * anteriores, depurada con los mismos criterios del Prototipo 102. Puede
+ * alimentarse de dos maneras:
+ *   · Automática: sumando los meses archivados en el histórico.
+ *   · Manual: cargando un CSV con cédula y base gravable anual, tomado de
+ *     los certificados de retención.
+ * ======================================================================= */
+
+/* Suma la base gravable de los meses archivados, para cada servidor */
+function acumuladoDesdeHistorico(){
+  if(!S.historico) return null;
+  var claves=Object.keys(S.historico).sort();
+  if(!claves.length) return null;
+  var acum={}, meses=0;
+  claves.forEach(function(k){
+    var h=S.historico[k];
+    if(!h||!h.baseRet) return;        /* solo meses que guardaron la base */
+    meses++;
+    Object.keys(h.baseRet).forEach(function(c){
+      acum[c]=(acum[c]||0)+h.baseRet[c];
+    });
+  });
+  if(!meses) return null;
+  return {mapa:acum, meses:meses, desde:claves[0], hasta:claves[claves.length-1]};
+}
+
+/* Carga manual desde CSV: Cédula,Nombre,Base gravable anual */
+function loadAcumulado(text){
+  var lineas=String(text||'').split(/\r?\n/).filter(function(l){return l.trim();});
+  if(!lineas.length){ S.error='El archivo está vacío.'; render(); return; }
+  var sep=(lineas[0].indexOf(';')>=0)?';':(lineas[0].indexOf('\t')>=0?'\t':',');
+  var n=0, mapa={};
+  lineas.forEach(function(l,i){
+    if(i===0 && !/^\d/.test(l.trim())) return;      /* encabezado */
+    var p=l.split(sep);
+    var ced=(p[0]||'').replace(/[^\d]/g,'');
+    var val=parseFloat(String(p[2]||p[1]||'').replace(/[^\d,.-]/g,'')
+            .replace(/\./g,'').replace(',','.'))||0;
+    if(ced&&val>0){ mapa[ced]=val; n++; }
+  });
+  if(!n){ S.error='No se reconoció ningún registro. Formato: Cédula,Nombre,Base anual.';
+          render(); return; }
+  S.acumAnual=mapa;
+  S.acumFuente='CSV · '+n+' servidores';
+  S.error='';
+  if(S.data) recompute();
+  S.guardado.pendiente=true; guardarEstado(); render();
+}
+
+/* Base anual aplicable a un servidor: la cargada manualmente tiene prioridad */
+function baseAnualDe(cedula){
+  var c=String(cedula);
+  if(S.acumAnual&&S.acumAnual[c]) return S.acumAnual[c];
+  var h=acumuladoDesdeHistorico();
+  if(h&&h.mapa[c]) return h.mapa[c];
+  return 0;
+}
+
+/* % fijo del Procedimiento 2, conforme al artículo 386 del E.T. */
+function porcentajeFijoP2(cedula,P){
+  var anual=baseAnualDe(cedula);
+  if(!anual) return null;
+  var mensual=anual/13;                 /* 12 meses + prima */
+  if(mensual<=0) return null;
+  var ret=retP1(mensual,P.uvt25||P.uvt);
+  if(!ret) return 0;
+  return ret/mensual;
+}
+
+/* =========================================================================
  * HISTÓRICO DE NÓMINAS — meses anteriores por régimen
  * Guarda una instantánea compacta de cada período procesado (IBC aplicable,
  * novedad y totales por servidor) para alimentar automáticamente el "IBC del
@@ -640,11 +730,13 @@ function instantanea(){
   if(!S.computed||!S.data) return null;
   var clave=clavePeriodo(S.computed.periodo);
   if(!clave) return null;
-  var ibc={}, nov={};
+  var ibc={}, nov={}, baseRet={};
   S.computed.rows.forEach(function(r){
     ibc[String(r.cedula)]={i:Math.round(r.norma.ibcSS), p:Math.round(r.norma.ibcParaf),
       n:r.nombre, v:r.nov};
     nov[String(r.cedula)]=r.nov;
+    /* Base gravable depurada del mes: alimenta el acumulado anual del Proc. 2 */
+    baseRet[String(r.cedula)]=Math.round((r.norma.dep&&r.norma.dep.bg)||0);
   });
   var C=S.computed;
   return {
@@ -656,7 +748,7 @@ function instantanea(){
     ssOk:C.ss.ok, ssMenos:C.ss.menos, ssMas:C.ss.mas,
     retOk:C.ret.p1+C.ret.p2, retRev:C.ret.rev, retImpacto:C.ret.impacto||0,
     novNormal:C.cnts.NORMAL||0, novVac:C.cnts.VACACIONES||0, novInc:C.cnts.INCAPACIDAD||0,
-    ibc:ibc
+    ibc:ibc, baseRet:baseRet
   };
 }
 
@@ -1254,6 +1346,22 @@ function diagnosticarRetencion(e,n,P){
         nota:'Procedimiento 1 aplicado correctamente. El valor '+q+' del campo CANTIDAD es la tarifa marginal del rango, no un porcentaje fijo.'};
     return {cod:'REV_P1',etiq:'Revisar (Proc.1)',dif:d1,
       nota:'Procedimiento 1 (tarifa marginal '+q+'%). La tabla del Art. 383 arroja '+cop(p1)+' contra '+cop(rep)+' retenidos. Diferencia de '+cop(Math.abs(d1))+'.'};
+  }
+
+  /* Si el PDF no trae el porcentaje pero hay acumulado anual cargado, se
+     calcula conforme al artículo 386 y se compara contra él. */
+  if(q===null||q===undefined){
+    var pct=porcentajeFijoP2(e.cedula,P);
+    if(pct!==null){
+      var cP2=mil(bgTope*pct);
+      if(Math.abs(cP2-rep)<=2000)
+        return {cod:'OK_P2',etiq:'Conforme (Proc.2)',dif:0,
+          nota:'Procedimiento 2 con porcentaje fijo del '+(pct*100).toFixed(2)+'% calculado '+
+            'sobre el acumulado anual cargado. Reproduce el valor retenido.'};
+      return {cod:'REV_P2',etiq:'Revisar (Proc.2)',dif:cP2-rep,
+        nota:'Con el porcentaje fijo del '+(pct*100).toFixed(2)+'% derivado del acumulado '+
+          'anual se esperaba '+cop(cP2)+' y se retuvieron '+cop(rep)+'.'};
+    }
   }
 
   /* Procedimiento 2 — porcentaje fijo certificado */
@@ -3979,7 +4087,37 @@ function vRetencion(){
           '<td class="mn neg">'+cop(cq.difDev||0)+'</td></tr>';
       }).join('')+'</tbody></table></div></div>' : '';
 
-  return avisoCruz+
+  /* Panel del acumulado anual: insumo del Procedimiento 2 */
+  var hAc=acumuladoDesdeHistorico();
+  var nManual=Object.keys(S.acumAnual||{}).length;
+  var panelAcum='<div class="section">'+
+    '<h2>Acumulado anual · Procedimiento 2</h2>'+
+    '<div class="info-box">'+
+      'El porcentaje fijo del artículo 386 se calcula sobre la base gravable de los '+
+      'doce meses anteriores, depurada con los conceptos del Prototipo 102. '+
+      'Sin este insumo los casos por Procedimiento 2 se comparan contra el '+
+      'Procedimiento 1 y aparecen diferencias que no existen.'+
+    '</div>'+
+    '<div class="kpi-row">'+
+      kpi(hAc?hAc.meses:0,'Meses archivados',hAc?'green':'amber',
+        hAc?('de '+etiquetaPeriodo(hAc.desde)+' a '+etiquetaPeriodo(hAc.hasta)):'Archive meses en Histórico')+
+      kpi(nManual,'Cargados por CSV',nManual?'green':'blue',S.acumFuente||'')+
+      kpi(rows.filter(function(r){return baseAnualDe(r.cedula)>0;}).length,
+        'Con base anual','blue','de '+rows.length+' servidores')+
+    '</div>'+
+    '<div class="inf-actions">'+
+      '<label class="btn-add" style="cursor:pointer">↑ Cargar acumulado anual (CSV)'+
+        '<input type="file" id="inp-acum" accept=".csv,.txt" style="display:none"></label>'+
+      (nManual?'<button class="btn-reset" id="acum-clr">Quitar</button>':'')+
+    '</div>'+
+    '<div class="mini-note">'+
+      'Formato: <code>Cédula,Nombre,Base gravable anual</code>, una línea por servidor, '+
+      'tomado de los certificados de retención. Si prefiere no cargarlo, archive doce '+
+      'meses en la pestaña Histórico y la app suma las bases automáticamente.'+
+    '</div>'+
+  '</div>';
+
+  return avisoCruz+panelAcum+
     '<div class="section">'+
     '<h2>Retención en la fuente — Depuración mensual (Art. 383 ET)</h2>'+
     '<div class="info-box">'+
@@ -4429,23 +4567,92 @@ function generarHallazgosAuto(){
 function generarCalifsAuto(){
   var C=S.computed;
   if(!C) return [];
-  var rows=C.rows,ss=C.ss,ret=C.ret;
-  var pctSS =rows.length?(ss.ok/rows.length):0;
-  var pctRet=rows.length?((ret.p1+ret.p2)/rows.length):0;
+  var rows=C.rows,ss=C.ss,ret=C.ret,P=S.P;
+  var N=rows.length||1;
+
+  /* Cada nota se deriva de los datos del período. Antes tres módulos tenían
+     valor fijo, de modo que la calificación apenas variaba entre meses. */
+
+  /* ① Integridad: descuadres de lectura y cuadre del devengado */
+  var desc=(S.data&&S.data.descuadres)||[];
+  var sumaDev=0; rows.forEach(function(r){ sumaDev+=(r.totDev||0); });
+  var cuadra=Math.abs(sumaDev-C.tot.devArch)<=1;
+  var nInt=100;
+  nInt-=desc.length*(100/N)*3;          /* cada bloque cruzado pesa el triple */
+  if(!cuadra) nInt-=40;
+  nInt=Math.max(0,Math.round(nInt));
+
+  /* ② Seguridad social: proporción de conformes, penalizando los de menos */
+  var pctSS=ss.ok/N;
+  var nSS=Math.round(pctSS*100 - (ss.menos/N)*20);
+  nSS=Math.max(0,Math.min(100,nSS));
+
+  /* ③ Parafiscales: depende de si hubo conciliación con la planilla */
+  var pilaTot=0;
+  Object.keys(S.pilaRep||{}).forEach(function(k){
+    pilaTot+=parseFloat(String(S.pilaRep[k]||'0').replace(/[.$]/g,'').replace(',','.'))||0;
+  });
+  var hayPila=(S.pilaDet&&S.pilaDet.length)||pilaTot>0;
+  var nPar, critPar;
+  if(!hayPila){
+    nPar=60; critPar='Base del Prototipo 159 aplicada, pero sin conciliación contra la '+
+      'planilla PILA: el módulo queda sin verificación externa.';
+  } else if(S.pilaDet&&S.pilaDet.length){
+    var X=cruzarPILA();
+    var pctP=X&&X.filas.length?(X.conformes/X.filas.length):0;
+    var sinC=X?(X.soloKactus.length+X.soloPILA.length):0;
+    nPar=Math.max(0,Math.round(pctP*100 - sinC*5));
+    critPar=X?(X.conformes+'/'+X.filas.length+' registros conformes contra la planilla'+
+      (sinC?'. '+sinC+' sin contraparte':'')+'.'):'Planilla cargada.';
+  } else {
+    nPar=85; critPar='Totales de la planilla conciliados; falta el detalle por servidor.';
+  }
+
+  /* ④ Retención: conformes, penalizando el impacto fiscal detectado */
+  var pctRet=(ret.p1+ret.p2)/N;
+  var impacto=Math.abs(ret.impacto||0);
+  var penImp=Math.min(25, Math.round(impacto/(C.tot.devArch||1)*100*40));
+  var nRet=Math.max(0,Math.min(100,Math.round(pctRet*100-penImp)));
+
+  /* ⑤ Prestaciones: solo evaluable si hubo vacaciones o liquidaciones */
+  var V=resumenVacaciones();
+  var nPres, critPres;
+  if(!V){
+    nPres=100; critPres='Sin vacaciones ni liquidaciones en el período: no hay '+
+      'prestaciones que verificar.';
+  } else {
+    var difTot=Math.abs(V.tot.suel)+Math.abs(V.tot.prima);
+    var baseTot=V.lista.reduce(function(s,x){return s+x.suelPag+x.primaPag;},0)||1;
+    nPres=Math.max(0,Math.round(100-(difTot/baseTot)*100*4));
+    critPres=V.lista.length+' liquidación(es) verificadas. Diferencia acumulada de '+
+      cop(difTot)+' frente a '+cop(baseTot)+' liquidados.';
+  }
+
+  /* ⑥ Trazabilidad: histórico, IBC anterior y revisión del auditor */
+  var nTraz=40;
+  if(S.ibcMesLabel) nTraz+=30;
+  if(Object.keys(S.historico||{}).length) nTraz+=20;
+  if(S.informe&&S.informe.revisado) nTraz+=10;
+  nTraz=Math.min(100,nTraz);
+
   return [
-    {m:'Integridad de datos',    p:0.15, n:95,
-     crit:'Devengado total validado al peso contra el PDF de prenómina KACTUS. '+rows.length+' empleados procesados sin errores de parseo.'},
-    {m:'Seguridad Social (IBC)', p:0.20, n:Math.max(40,Math.round(pctSS*100*0.75)),
-     crit:ss.ok+'/'+rows.length+' conformes ('+(pctSS*100).toFixed(1)+'%). '+ss.menos+' cotizaron de menos, '+ss.mas+' de más.'},
-    {m:'Parafiscales',           p:0.15, n:80,
-     crit:'Conciliación PILA no realizada (planilla no suministrada). Prototipo 159-KACTUS aplicado correctamente.'},
-    {m:'Retención en la fuente', p:0.25, n:Math.max(30,Math.round(pctRet*100*0.85)),
-     crit:(ret.p1+ret.p2)+'/'+rows.length+' conformes ('+(pctRet*100).toFixed(1)+'%). '+ret.rev+' casos por revisar. Base corregida: excluye conceptos 102 y 119.'},
-    {m:'Prestaciones sociales',  p:0.15, n:70,
-     crit:'Factores acumulados de liquidaciones parciales pendientes de validación con histórico.'},
-    {m:'Trazabilidad y control', p:0.10, n:S.ibcMesLabel?90:65,
-     crit:S.ibcMesLabel?'Historial de IBC documentado con fuente y mes de referencia. Prototipos KACTUS citados.'
-                       :'Historial de IBC no cargado — trazabilidad del mes anterior incompleta.'},
+    {m:'Integridad de datos', p:0.15, n:nInt,
+     crit:N+' servidores procesados. '+(cuadra?'Devengado validado al peso contra el PDF'
+          :'El devengado NO cuadra contra el total del PDF')+
+          (desc.length?'. '+desc.length+' bloque(s) con conceptos cruzados':'.')},
+    {m:'Seguridad Social (IBC)', p:0.20, n:nSS,
+     crit:ss.ok+'/'+N+' conformes ('+(pctSS*100).toFixed(1)+'%). '+ss.menos+
+          ' cotizaron de menos y '+ss.mas+' de más.'},
+    {m:'Parafiscales', p:0.15, n:nPar, crit:critPar},
+    {m:'Retención en la fuente', p:0.25, n:nRet,
+     crit:(ret.p1+ret.p2)+'/'+N+' conformes ('+(pctRet*100).toFixed(1)+'%). '+ret.rev+
+          ' por revisar'+(impacto?', impacto fiscal de '+cop(ret.impacto):'')+'.'},
+    {m:'Prestaciones sociales', p:0.15, n:nPres, crit:critPres},
+    {m:'Trazabilidad y control', p:0.10, n:nTraz,
+     crit:(S.ibcMesLabel?'IBC del mes anterior documentado ('+S.ibcMesLabel+').'
+                        :'Sin IBC del mes anterior.')+
+          ' '+Object.keys(S.historico||{}).length+' período(s) archivados.'+
+          (S.informe&&S.informe.revisado?' Hallazgos revisados por el auditor.':'')}
   ];
 }
 
@@ -5247,6 +5454,23 @@ function wire(){
     };
   });
 
+  /* ---- Acumulado anual ---- */
+  var ia=qs('inp-acum');
+  if(ia) ia.onchange=function(){
+    var f=this.files[0]; if(!f) return;
+    var rd=new FileReader();
+    rd.onload=function(ev){ loadAcumulado(ev.target.result); };
+    rd.readAsText(f,'UTF-8');
+  };
+  var ac=qs('acum-clr');
+  if(ac) ac.onclick=function(){
+    if(confirm('¿Quitar el acumulado anual cargado?')){
+      S.acumAnual={}; S.acumFuente='';
+      if(S.data) recompute();
+      S.guardado.pendiente=true; guardarEstado(); render();
+    }
+  };
+
   /* ---- Planilla PILA ---- */
   var ip=qs('inp-pila');
   if(ip) ip.onchange=function(){ if(this.files[0]) loadFile(this.files[0],'pila'); };
@@ -5687,6 +5911,9 @@ try {
     clavePeriodo:clavePeriodo, claveMesAnterior:claveMesAnterior,
     archivarPDF:archivarPDF, archivarLote:archivarLote, instantanea:instantanea,
     verificarEntrega:verificarEntrega, resumenVerificacion:resumenVerificacion,
+    loadAcumulado:loadAcumulado, baseAnualDe:baseAnualDe,
+    porcentajeFijoP2:porcentajeFijoP2, acumuladoDesdeHistorico:acumuladoDesdeHistorico,
+    generarCalifsAuto:generarCalifsAuto,
     validarCuadre:validarCuadre
   };
 } catch(bootErr) {
