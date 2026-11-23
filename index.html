@@ -159,6 +159,129 @@ var DEFAULT_P={
   tol:100, tolPILA:5000
 };
 
+/* =========================================================================
+ * CLASES DE RIESGO ARL
+ *
+ * La tarifa de riesgos laborales no es una sola para la entidad: se fija por
+ * centro de trabajo, segun la actividad economica alli desarrollada
+ * (Decreto 1072 de 2015, articulo 2.2.4.3.5, que compilo el Decreto 1772 de
+ * 1994, articulo 13). Las tarifas iniciales por clase son las de esa norma.
+ *
+ * CORREGIDO EL 21/11/2026. Hasta esa fecha la aplicacion aplicaba 6,96 % —la
+ * tarifa inicial de la clase V— a toda la planta. La planilla de octubre de
+ * 2026 de Empleados Publicos desmiente ese supuesto: de 223 afiliados, 190
+ * cotizan al 0,522 % (clase I), 28 al 1,044 % (clase II), 2 al 4,350 % y
+ * solo 3 al 6,960 %. Sobre base de $1.899.175.208 la tarifa unica arrojaba
+ * $132.182.594 contra los $12.253.600 realmente liquidados: una
+ * sobreestimacion de $119.928.994, casi once veces el valor correcto.
+ * ======================================================================= */
+var CLASES_ARL=[
+  {clase:'I',   tasa:0.00522, min:0.00348, max:0.00696},
+  {clase:'II',  tasa:0.01044, min:0.00435, max:0.01653},
+  {clase:'III', tasa:0.02436, min:0.00783, max:0.04089},
+  {clase:'IV',  tasa:0.04350, min:0.01740, max:0.06960},
+  {clase:'V',   tasa:0.06960, min:0.03219, max:0.08700}
+];
+
+/* Normaliza lo que venga en la columna de clase de riesgo: admite el numero
+   romano, el arabigo y la tarifa escrita como porcentaje o como decimal. */
+function normClaseARL(v){
+  var s=String(v===undefined||v===null?'':v).trim().toUpperCase()
+        .replace(/CLASE\s*/,'').replace(/\s+/g,'');
+  if(!s) return null;
+  var rom={'I':'I','1':'I','II':'II','2':'II','III':'III','3':'III',
+           'IV':'IV','4':'IV','V':'V','5':'V'};
+  if(rom[s]){
+    for(var i=0;i<CLASES_ARL.length;i++)
+      if(CLASES_ARL[i].clase===rom[s])
+        return {clase:'Clase '+rom[s], tasa:CLASES_ARL[i].tasa};
+  }
+  var num=parseFloat(s.replace('%','').replace(',','.'));
+  if(isFinite(num)&&num>0){
+    /* 0,522 y 4,35 vienen en puntos porcentuales; 0,00522 ya es decimal */
+    var t=(num>=0.1)?num/100:num;
+    if(t>0.2) return null;                      /* fuera de todo rango legal */
+    return {clase:(t*100).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+'%',
+            tasa:t};
+  }
+  return null;
+}
+
+/* Tarifa aplicable a un servidor, con la fuente de donde salio.
+   Prioridad: planilla PILA del periodo (es la liquidacion real del operador),
+   luego la caracterizacion de planta, y por ultimo el parametro general. */
+function tarifaArlDe(cedula,P){
+  var c=String(cedula||'');
+  var pl=S.arlPILA&&S.arlPILA[c];
+  if(pl&&pl.tasa>0) return {tasa:pl.tasa, clase:pl.clase, fuente:'Planilla PILA'};
+  var pt=S.planta&&S.planta[c];
+  if(pt&&pt.arl&&pt.arl.tasa>0)
+    return {tasa:pt.arl.tasa, clase:pt.arl.clase, fuente:'Planta'};
+  return {tasa:(P&&P.arl!==undefined?P.arl:0.0696),
+          clase:'(sin asignar)', fuente:'Parametro por defecto'};
+}
+
+/* Construye el mapa cedula -> tarifa a partir de la planilla PILA. Las filas
+   con tarifa 0,000 % corresponden a dias de novedad en que no se cotiza a
+   riesgos laborales, no a una clase de riesgo: se descartan y se toma la
+   mayor tarifa efectiva del servidor en el periodo. */
+function mapaARLdesdePILA(){
+  var m={};
+  (S.pilaDet||[]).forEach(function(x){
+    var t=x.tarifaArl;
+    if(t===null||t===undefined||!isFinite(t)||t<=0) return;
+    var tasa=(t>=0.1)?t/100:t;          /* la planilla la imprime en % */
+    if(tasa<=0||tasa>0.2) return;
+    var c=String(x.cedula);
+    if(!m[c]||tasa>m[c].tasa){
+      var cl=null;
+      CLASES_ARL.forEach(function(k){
+        if(Math.abs(k.tasa-tasa)<0.00005) cl='Clase '+k.clase;
+      });
+      m[c]={tasa:tasa, clase:cl||((tasa*100).toFixed(3)+'%')};
+    }
+  });
+  return m;
+}
+
+/* Servidores a quienes la planilla liquido ARL al 0,000 % en los dias de
+   novedad. No se corrige el calculo normativo por esto: se deja a la vista,
+   cuantificado, para que el hallazgo se sustente con el soporte. */
+function arlNovedadSinCotizar(){
+  if(!S.computed||!S.pilaDet||!S.pilaDet.length) return null;
+  var idx={}; S.pilaDet.forEach(function(x){ idx[String(x.cedula)]=x; });
+  var casos=[], dias=0, norma=0, pagado=0;
+  S.computed.rows.forEach(function(r){
+    var pl=idx[String(r.cedula)];
+    if(!pl||!pl.diasArlCero) return;
+    var t=(r.norma.arlTarifa&&r.norma.arlTarifa.tasa)||0;
+    var esperadoDias=Math.round((r.norma.ibcSS||0)*t*pl.diasArlCero/30);
+    casos.push({cedula:r.cedula, nombre:r.nombre, dias:pl.diasArlCero,
+      arlNorma:r.norma.arl, arlPlanilla:pl.aporArl||0, noCotizado:esperadoDias});
+    dias+=pl.diasArlCero; norma+=r.norma.arl; pagado+=(pl.aporArl||0);
+  });
+  if(!casos.length) return null;
+  return {casos:casos, dias:dias, norma:norma, pagado:pagado, dif:norma-pagado};
+}
+
+/* Resumen por clase de riesgo, para la vista, el Excel y los informes */
+function resumenARL(){
+  if(!S.computed) return null;
+  var g={}, sinClase=0;
+  S.computed.rows.forEach(function(r){
+    var t=(r.norma&&r.norma.arlTarifa)||{tasa:0,clase:'(sin asignar)',fuente:'—'};
+    var k=t.clase+'|'+t.tasa+'|'+t.fuente;
+    if(!g[k]) g[k]={clase:t.clase, tasa:t.tasa, fuente:t.fuente, n:0, base:0, aporte:0};
+    g[k].n++; g[k].base+=r.norma.ibcSS; g[k].aporte+=r.norma.arl;
+    if(t.fuente==='Parametro por defecto') sinClase++;
+  });
+  var lista=Object.keys(g).map(function(k){return g[k];})
+    .sort(function(a,b){return a.tasa-b.tasa;});
+  return {lista:lista, sinClase:sinClase,
+    base:lista.reduce(function(a,x){return a+x.base;},0),
+    aporte:lista.reduce(function(a,x){return a+x.aporte;},0)};
+}
+
 /* Prototipo 102 KACTUS — Retención en la Fuente (42 conceptos).
    ATENCIÓN: el prototipo lista tanto los conceptos que SUMAN (ingresos) como
    los que RESTAN (aportes obligatorios y rentas exentas). Sumarlos todos
@@ -198,6 +321,8 @@ function nuevoWS(){
     data:null, computed:null,
     ibcAnt:{}, ibcMesLabel:'', fileName:'', novedades:[], novedadesTexto:'',
     pilaDet:[], pilaArchivo:'', historico:{}, acumAnual:{}, acumFuente:'',
+    planta:{}, plantaFuente:'', plantaRetiros:[], plantaArchivo:'', plantaDiag:null,
+    interrupciones:[], interrTexto:'',
     pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
     informe:{inicializado:false, elaboro:'',
       cargoElaboro:'Profesional Universitario — Dirección de Talento Humano',
@@ -225,7 +350,10 @@ var S={
   pilaDet:[], pilaMap:null, pilaHdr:-1, pilaMatriz:null, pilaArchivo:'',
   pilaDebug:null, pilaAviso:'',
   historico:{}, histComp:'', destinoPDF:null, avisoHist:'', histLote:null,
-  acumAnual:{}, acumFuente:'',
+  acumAnual:{}, acumFuente:'', planta:{}, plantaFuente:'',
+  plantaRetiros:[], plantaArchivo:'', plantaDiag:null,
+  interrupciones:[], interrTexto:'',
+  arlPILA:{},                 /* cedula -> tarifa ARL leida de la planilla */
   focoCorreccion:'',
   ibcAnt:{}, ibcMesLabel:'',
   pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
@@ -262,6 +390,10 @@ function volcarWS(reg){
   w.pilaDet=S.pilaDet; w.pilaArchivo=S.pilaArchivo;
   w.historico=S.historico;
   w.acumAnual=S.acumAnual; w.acumFuente=S.acumFuente;
+  w.planta=S.planta; w.plantaFuente=S.plantaFuente;
+  w.plantaRetiros=S.plantaRetiros; w.plantaArchivo=S.plantaArchivo;
+  w.plantaDiag=S.plantaDiag;
+  w.interrupciones=S.interrupciones; w.interrTexto=S.interrTexto;
 }
 
 /* Carga el workspace del régimen indicado a los campos activos */
@@ -277,6 +409,10 @@ function cargarWS(reg){
   S.pilaDet=w.pilaDet||[]; S.pilaArchivo=w.pilaArchivo||'';
   S.historico=w.historico||{};
   S.acumAnual=w.acumAnual||{}; S.acumFuente=w.acumFuente||'';
+  S.planta=w.planta||{}; S.plantaFuente=w.plantaFuente||'';
+  S.plantaRetiros=w.plantaRetiros||[]; S.plantaArchivo=w.plantaArchivo||'';
+  S.plantaDiag=w.plantaDiag||null;
+  S.interrupciones=w.interrupciones||[]; S.interrTexto=w.interrTexto||'';
 }
 
 function cambiarRegimen(nuevo){
@@ -298,7 +434,11 @@ function serializar(){
       pilaRep:w.pilaRep, informe:w.informe, fileName:w.fileName,
       novedades:w.novedades, novedadesTexto:w.novedadesTexto,
       pilaDet:w.pilaDet, pilaArchivo:w.pilaArchivo, historico:w.historico,
-      acumAnual:w.acumAnual, acumFuente:w.acumFuente
+      acumAnual:w.acumAnual, acumFuente:w.acumFuente,
+      planta:w.planta, plantaFuente:w.plantaFuente,
+      plantaRetiros:w.plantaRetiros, plantaArchivo:w.plantaArchivo,
+      plantaDiag:w.plantaDiag,
+      interrupciones:w.interrupciones, interrTexto:w.interrTexto
       /* computed se recalcula al restaurar */
     };
   }
@@ -359,6 +499,10 @@ function aplicarEstado(d, silencioso){
       w.pilaDet=src.pilaDet||[]; w.pilaArchivo=src.pilaArchivo||'';
       w.historico=src.historico||{};
       w.acumAnual=src.acumAnual||{}; w.acumFuente=src.acumFuente||'';
+      w.planta=src.planta||{}; w.plantaFuente=src.plantaFuente||'';
+      w.plantaRetiros=src.plantaRetiros||[]; w.plantaArchivo=src.plantaArchivo||'';
+      w.plantaDiag=src.plantaDiag||null;
+      w.interrupciones=src.interrupciones||[]; w.interrTexto=src.interrTexto||'';
     }
     S.ws[r]=w;
   });
@@ -486,16 +630,58 @@ function depura(baseRet,sT,pT,fsp,P){
 }
 
 function calcEmpleado(e,P){
-  /* IBC Seguridad Social — suma de conceptos en P101 */
-  var ibcSS=0;
+  /* ── IBC de seguridad social ───────────────────────────────────────────
+     Se arma SIEMPRE desde los conceptos de la prenomina que pertenecen al
+     Prototipo 101. El prototipo no incluye vacaciones (107) ni incapacidades
+     (139, 141, 148), de modo que en un mes con novedad esta suma recoge
+     unicamente los dias efectivamente laborados.
+
+     El articulo 1 del Decreto 1406 de 1999 ordena cotizar sobre el IBC del
+     mes inmediatamente anterior durante la novedad. Eso aplica a LOS DIAS DE
+     LA NOVEDAD, no al mes entero: asi lo liquida el operador y asi lo
+     evidencia la planilla, donde el servidor con novedad aparece en dos
+     renglones, cada uno con su propio IBC. De ahi la base mixta.
+
+     CORREGIDO EL 21/11/2026. Antes se reemplazaba el mes completo por el IBC
+     anterior, lo que inflaba la base en quien solo estuvo parte del mes en
+     novedad: con el IBC anterior de un servidor en $5.727.904 y 22 dias de
+     vacaciones, la base quedaba en $5.727.904 cuando la planilla liquido
+     $5.307.305 — $420.599 de mas, y con ellos salud, pension y FSP. */
+  var ibcProto=0;
   Object.keys(e.c).forEach(function(cod){
-    if(P101.has(cod)) ibcSS+=e.c[cod];
+    if(P101.has(cod)) ibcProto+=e.c[cod];
   });
-  /* Novedad → usar IBC mes anterior */
   var nov=e.nov||'NORMAL';
+  var ibcSS=ibcProto;
+  var ibcDet={proto:ibcProto, porNovedad:0, diasNov:0, diasLab:0,
+              antMes:0, regla:'Suma de conceptos del Prototipo 101'};
   if(nov!=='NORMAL'){
-    var ant=S.ibcAnt[String(e.cedula)];
-    if(ant) ibcSS=ant;
+    var ant=S.ibcAnt[String(e.cedula)]||0;
+    var qn=e.q||{};
+    var dNov=0;
+    ['107','139','141','148','143','196','602'].forEach(function(k){
+      if(qn[k]&&qn[k]<=31) dNov+=qn[k];
+    });
+    var dLab=(qn['101']&&qn['101']<=31)?qn['101']:0;
+    ibcDet.diasNov=dNov; ibcDet.diasLab=dLab; ibcDet.antMes=ant;
+    if(!ant){
+      ibcDet.regla='Prototipo 101 — falta el IBC del mes anterior';
+    } else if(dNov>0 && dNov<30 && dLab>0 && (dNov+dLab)<=31){
+      /* Base mixta: los dias de novedad al IBC anterior prorrateado, los
+         dias laborados a los conceptos del prototipo. */
+      ibcDet.porNovedad=Math.round(ant*dNov/30);
+      ibcSS=ibcDet.porNovedad+ibcProto;
+      ibcDet.regla='Mixta: '+dNov+' dia(s) al IBC anterior + '+dLab+
+                   ' dia(s) por Prototipo 101';
+    } else {
+      /* Novedad de mes completo, o dias inconsistentes con el prototipo
+         (el concepto 101 ya cubre el mes): se aplica el IBC anterior. */
+      ibcSS=ant;
+      ibcDet.porNovedad=ant;
+      ibcDet.regla=(dNov>=30||!dLab)?'Mes completo al IBC del mes anterior'
+        :'IBC anterior al mes completo — dias de novedad ('+dNov+') y '+
+         'laborados ('+dLab+') suman mas de 31; revise el prorrateo';
+    }
   }
   /* Días efectivamente cotizados en el mes (sueldo + vacaciones + incapacidades).
      El piso de 1 SMLMV se prorratea: aplicarlo completo a quien laboró parte del
@@ -509,6 +695,8 @@ function calcEmpleado(e,P){
   var pisoIBC=P.smlmv*diasCot/30;
   ibcSS=Math.max(ibcSS,pisoIBC);
   ibcSS=Math.min(ibcSS,P.topeIBC*P.smlmv);
+  ibcDet.aplicado=ibcSS;
+  ibcDet.piso=pisoIBC;
 
   /* Base de PARAFISCALES: Prototipo 159 (distinta del IBC de seguridad social).
      Incluye vacaciones, primas, incapacidades y auxilio de transporte. */
@@ -528,7 +716,10 @@ function calcEmpleado(e,P){
   var sT=r100(ibcSS*P.saludT), sE=r100(ibcSS*P.saludE);
   var pT=r100(ibcSS*P.penT),   pE=r100(ibcSS*P.penE);
   var fspR=fspRate(ibcSS,P.smlmv), fsp=r100(ibcSS*fspR);
-  var arl=r100(ibcSS*P.arl);
+  /* ARL por clase de riesgo del centro de trabajo, no por tarifa unica
+     (Decreto 1072 de 2015, art. 2.2.4.3.5). */
+  var arlTarifa=tarifaArlDe(e.cedula,P);
+  var arl=r100(Math.min(ibcSS,P.smlmv*P.topeIBC)*arlTarifa.tasa);
   /* Parafiscales sobre base Prot.159, NO sobre el IBC de seguridad social */
   var ccf=r100(ibcParaf*P.ccf), sena=r100(ibcParaf*P.sena);
   var icbf=r100(ibcParaf*P.icbf), esap=r100(ibcParaf*P.esap), men=r100(ibcParaf*P.men);
@@ -618,7 +809,7 @@ function calcEmpleado(e,P){
   }
 
   return{
-    ibcSS,ibcParaf,sT,sE,pT,pE,fsp,fspR,arl,ccf,sena,icbf,esap,men,
+    ibcSS,ibcDet,ibcParaf,sT,sE,pT,pE,fsp,fspR,arl,arlTarifa,ccf,sena,icbf,esap,men,
     baseRet,dep,rP1,bspNorm,
     netoLeg,topeLib,alertaLib:alertaLib,
     dAlimentos,dEmbargo,dVolunt,topeAlim,topeEmbCivil,
@@ -918,7 +1109,12 @@ var PILA_CAMPOS=[
   {k:'ibcCcf',   lbl:'IBC CCF',        pats:['IBC CCF','IBC CAJA','BASE CCF']},
   {k:'aporSalud',lbl:'Aporte salud',   pats:['COTIZACION SAL','APORTE SAL','VALOR SAL','TOTAL SAL']},
   {k:'aporPen',  lbl:'Aporte pensión', pats:['COTIZACION PEN','APORTE PEN','VALOR PEN','TOTAL PEN']},
-  {k:'fsp',      lbl:'FSP',            pats:['FONDO SOLID','FSP','SOLIDARID']}
+  {k:'fsp',      lbl:'FSP',            pats:['FONDO SOLID','FSP','SOLIDARID']},
+  {k:'tarifaArl',lbl:'Tarifa ARL',     pats:['TARIFA']},
+  {k:'aporArl',  lbl:'Aporte ARL',     pats:['COTIZACION ARL','APORTE ARL','VALOR ARL']},
+  {k:'aporCcf',  lbl:'Aporte CCF',     pats:['COTIZACION CCF','APORTE CCF','VALOR CCF','APORTE CAJA']},
+  {k:'aporParaf',lbl:'Aporte SENA/ICBF/ESAP/MEN',
+                 pats:['APORTE SENA','SENA ICBF','PARAFISCAL','OTROS APORTES']}
 ];
 
 function normHdr(s){
@@ -971,7 +1167,60 @@ function armarPILA(matriz,filaHdr,map){
     });
     out.push(o);
   }
-  return out;
+  return consolidarPILA(out);
+}
+
+/* Un servidor con novedad en el mes aparece en la planilla en DOS renglones:
+   los dias anteriores a la novedad y los posteriores, cada uno con su propio
+   IBC y su propio aporte. En la planilla de octubre de 2026 esto le pasa a 11
+   servidores de Empleados Publicos y a 3 de Trabajadores Oficiales. Antes, el
+   indice del cruce espejo se construia con la ultima fila de cada cedula y
+   perdia la primera, de modo que el cruce reportaba una diferencia enorme en
+   todos los casos con novedad. Los renglones de una misma cedula se suman:
+   son fracciones del mismo mes. La tarifa de ARL no se suma —se conserva la
+   mayor, que es la clase de riesgo real— y el nombre se toma del primero. */
+function consolidarPILA(filas){
+  var orden=[], idx={};
+  var SUMAR=['diasSal','diasPen','ibcSalud','ibcPen','ibcArl','ibcCcf',
+             'aporSalud','aporPen','fsp','aporArl','aporCcf','aporParaf'];
+  /* Dias y base sobre los que la planilla SI liquido riesgos laborales: los
+     renglones con tarifa 0,000 % corresponden a dias de novedad en que el
+     operador no cobro ARL. Guardarlos aparte permite verificar la aritmetica
+     del operador (base x tarifa = aporte) sin confundirla con el calculo
+     normativo del mes completo. */
+  function marcaArl(o,f){
+    var t=f.tarifaArl;
+    var pag=(t!==null&&t!==undefined&&isFinite(t)&&t>0);
+    var d=(f.diasSal!==null&&f.diasSal!==undefined)?f.diasSal:
+          ((f.diasPen!==null&&f.diasPen!==undefined)?f.diasPen:0);
+    if(pag){
+      o.diasArl=(o.diasArl||0)+d;
+      o.ibcArlPaga=(o.ibcArlPaga||0)+(f.ibcArl||0);
+    } else {
+      o.diasArlCero=(o.diasArlCero||0)+d;
+    }
+  }
+  filas.forEach(function(f){
+    var c=f.cedula;
+    if(!idx[c]){
+      f.renglones=1;
+      f.diasArl=0; f.diasArlCero=0; f.ibcArlPaga=0;
+      marcaArl(f,f);
+      idx[c]=f; orden.push(c); return;
+    }
+    var a=idx[c];
+    a.renglones=(a.renglones||1)+1;
+    marcaArl(a,f);
+    SUMAR.forEach(function(k){
+      if(f[k]===null||f[k]===undefined) return;
+      a[k]=(a[k]===null||a[k]===undefined?0:a[k])+f[k];
+    });
+    if(f.tarifaArl!==null&&f.tarifaArl!==undefined&&
+       (a.tarifaArl===null||a.tarifaArl===undefined||f.tarifaArl>a.tarifaArl))
+      a.tarifaArl=f.tarifaArl;
+    if(!a.nombre&&f.nombre) a.nombre=f.nombre;
+  });
+  return orden.map(function(c){return idx[c];});
 }
 
 /* Cruce espejo: prenómina KACTUS contra planilla PILA */
@@ -994,14 +1243,36 @@ function cruzarPILA(){
       if(!ok) d.push(lbl);
       return {lbl:lbl,kac:kac,pil:pil,dif:dif,ok:ok};
     }
+    /* La planilla liquida el aporte TOTAL de cada subsistema, no el descuento
+       del servidor: en octubre de 2026, ABRIL ACEVEDO con IBC de $4.271.774
+       figura con $534.000 de salud (12,5 %) y $683.500 de pension (16 %), no
+       con los $170.871 que KACTUS le descuenta por cada concepto.
+       CORREGIDO EL 21/11/2026: antes se contrastaba el concepto 500 contra la
+       columna de salud y el 501 contra la de pension, de modo que el cruce
+       marcaba diferencia en TODOS los servidores. La columna de pension de la
+       planilla incluye el Fondo de Solidaridad Pensional —ABRIL FORERO, con
+       IBC de 5,68 SMLMV, figura con el 17 %—, asi que se compara contra
+       pension mas FSP. El descuento al servidor se verifica aparte, en la
+       revision de la prenomina. */
     var c=[
       cmp('IBC salud',   n.ibcSS,  pl.ibcSalud),
       cmp('IBC pensión', n.ibcSS,  pl.ibcPen),
       cmp('IBC ARL',     n.ibcSS,  pl.ibcArl),
       cmp('IBC CCF',     n.ibcParaf,pl.ibcCcf),
-      cmp('Aporte salud',   (r.c['500']||0), pl.aporSalud),
-      cmp('Aporte pensión', (r.c['501']||0), pl.aporPen),
-      cmp('FSP',            (r.c['502']||0), pl.fsp)
+      cmp('Aporte salud (12,5%)',   n.sT+n.sE,          pl.aporSalud),
+      cmp('Aporte pensión + FSP',   n.pT+n.pE+n.fsp,    pl.aporPen),
+      cmp('FSP',                    n.fsp,              pl.fsp),
+      cmp('Aporte CCF',             n.ccf,              pl.aporCcf),
+      cmp('SENA+ICBF+ESAP+MEN',     n.sena+n.icbf+n.esap+n.men, pl.aporParaf),
+      /* ARL: cuando la planilla trae renglones con tarifa 0 % (dias de
+         novedad sin cotizacion de riesgos), se contrasta la aritmetica del
+         operador sobre su propia base cotizada; el calculo normativo del mes
+         completo queda en la seccion de riesgos laborales. */
+      cmp('Aporte ARL',
+          (pl.diasArlCero>0 && pl.ibcArlPaga>0)
+            ? Math.round((pl.ibcArlPaga*(r.norma.arlTarifa?r.norma.arlTarifa.tasa:0))/100)*100
+            : r.norma.arl,
+          pl.aporArl)
     ].filter(Boolean);
     filas.push({row:r, pila:pl, comps:c, ok:d.length===0, difs:d});
   });
@@ -1010,6 +1281,372 @@ function cruzarPILA(){
   return {filas:filas, soloKactus:soloKactus, soloPILA:soloPILA,
     conformes:filas.filter(function(f){return f.ok;}).length,
     conDif:filas.filter(function(f){return !f.ok;}).length};
+}
+
+/* =========================================================================
+ * CARACTERIZACIÓN DE PLANTA
+ *
+ * La fecha de ingreso determina varios cortes que no se pueden verificar sin
+ * ella: la bonificación por servicios prestados se causa cada vez que el
+ * servidor cumple un año continuo de labor (Decreto 1042 de 1978, art. 45),
+ * las vacaciones se causan por año de servicio (art. 8 del Decreto 1045 de
+ * 1978) y la antigüedad define primas y escalafón.
+ * ======================================================================= */
+
+function parseFechaCol(s){
+  /* Acepta dd/mm/aaaa, dd-mm-aaaa y aaaa-mm-dd */
+  var v=String(s||'').trim();
+  var m=v.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if(m) return {d:+m[3], m:+m[2], a:+m[1]};
+  m=v.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if(m) return {d:+m[1], m:+m[2], a:+m[3]};
+  return null;
+}
+
+/* Fecha {d,m,a} en texto, para mostrar */
+function fmtFecha(f){
+  if(!f||!f.a) return '';
+  function z(x){ return (x<10?'0':'')+x; }
+  return z(f.d)+'/'+z(f.m)+'/'+f.a;
+}
+
+function loadPlanta(text,nombreArchivo){
+  var lineas=String(text||'').split(/\r?\n/).filter(function(l){return l.trim();});
+  if(!lineas.length){ S.error='El archivo está vacío.'; render(); return; }
+  var sep=(lineas[0].indexOf(';')>=0)?';':(lineas[0].indexOf('\t')>=0?'\t':',');
+  var mapa={}, n=0, sinFecha=0, conArl=0;
+  lineas.forEach(function(l,i){
+    if(i===0 && !/^\d/.test(l.trim())) return;        /* encabezado */
+    var p=l.split(sep);
+    var ced=(p[0]||'').replace(/[^\d]/g,'');
+    if(!ced) return;
+    var f=parseFechaCol(p[2]);
+    if(!f) sinFecha++;
+    mapa[ced]={nombre:(p[1]||'').trim(), ingreso:f, ingresoTxt:(p[2]||'').trim(),
+      cargo:(p[3]||'').trim(), grado:(p[4]||'').trim(),
+      dependencia:(p[5]||'').trim(), vinculacion:(p[6]||'').trim(),
+      arl:normClaseARL(p[7]), arlTxt:(p[7]||'').trim(),
+      sueldo:aNumero(p[8]), gastosRep:aNumero(p[9]), sueldoMezclado:false};
+    if(normClaseARL(p[7])) conArl++;
+    n++;
+  });
+  if(!n){ S.error='No se reconoció ningún registro. Formato: Cédula,Nombre,Fecha ingreso,Cargo,Grado,Dependencia,Vinculación.';
+          render(); return; }
+  S.planta=mapa;
+  S.plantaFuente=n+' servidores'+(sinFecha?' · '+sinFecha+' sin fecha legible':'')+
+    (conArl?' · '+conArl+' con clase de riesgo':'');
+  S.plantaArchivo=nombreArchivo||'';
+  S.plantaRetiros=[];
+  S.plantaDiag={total:n, sinFecha:sinFecha, vacantes:0, textoFecha:0,
+    conArl:conArl, retiros:0, porReg:null, hojas:['CSV']};
+  S.error='';
+  if(S.data) recompute();
+  S.guardado.pendiente=true; guardarEstado(); render();
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * CARACTERIZACION DE PLANTA DESDE EL EXCEL DE LA DIRECCION DE TALENTO HUMANO
+ *
+ * El archivo que produce la DTH (CARACTERIZACION_PLANTA_GOBERNACION_2026) trae
+ * 60 columnas, la mayoria sin relacion con la nomina y varias con datos
+ * personales sensibles: correo y telefono personales, direccion de residencia,
+ * RH, EPS, AFP, estrato, grupo etnico, condicion de salud, discapacidad,
+ * genero y afiliacion sindical. De ese libro se leen UNICAMENTE las columnas
+ * que la auditoria necesita; el resto no entra ni al estado ni al respaldo.
+ *
+ * Las columnas se localizan por el texto del encabezado, no por su posicion,
+ * de modo que el archivo siga sirviendo si la DTH reordena o agrega columnas.
+ * ═══════════════════════════════════════════════════════════════════════ */
+var PLANTA_COLS=[
+  {k:'cedula',      req:true,  pats:['CEDULA','CÉDULA','DOCUMENTO','IDENTIFICACION']},
+  {k:'nombre',      req:true,  pats:['NOMBRE Y APELLIDO','NOMBRES Y APELLIDOS','NOMBRE']},
+  {k:'ingreso',     req:true,  pats:['FECHA INGRESO','FECHA DE INGRESO','FECHA  INGRESO','INGRESO']},
+  {k:'cargo',       req:false, pats:['DENOMINACION DEL CARGO','DENOMINACIÓN DEL CARGO','CARGO']},
+  {k:'codigo',      req:false, pats:['CODIGO','CÓDIGO']},
+  {k:'grado',       req:false, pats:['GRADO']},
+  {k:'nivel',       req:false, pats:['NIVEL']},
+  {k:'estado',      req:false, pats:['ESTADO ADMINISTRATIVO','ESTADO']},
+  {k:'secretaria',  req:false, pats:['SECRETARIA','SECRETARÍA']},
+  {k:'dependencia', req:false, pats:['DEPENDENCIA']},
+  {k:'sueldo',      req:false, pats:['SUELDO','ASIGNACION BASICA','ASIGNACIÓN BÁSICA','SALARIO']},
+  {k:'gastosRep',   req:false, pats:['GASTOS DE REPRESENTACION','GASTOS DE REPRESENTACIÓN',
+                                     'GASTOS REPRESENTACION','GTOS REPRESENTACION']},
+  {k:'arl',         req:false, pats:['CLASE DE RIESGO','CLASE RIESGO','RIESGO ARL','TARIFA ARL']},
+  {k:'retiro',      req:false, pats:['FECHA RETIRO','FECHA DE RETIRO']},
+  {k:'novedad',     req:false, pats:['NOVEDAD']}
+];
+
+function normEnc(v){
+  return String(v===undefined||v===null?'':v).toUpperCase()
+    .replace(/[ÁÀÄÂ]/g,'A').replace(/[ÉÈËÊ]/g,'E').replace(/[ÍÌÏÎ]/g,'I')
+    .replace(/[ÓÒÖÔ]/g,'O').replace(/[ÚÙÜÛ]/g,'U').replace(/Ñ/g,'N')
+    .replace(/[^A-Z0-9]+/g,' ').trim();
+}
+
+/* Localiza la fila de encabezados y la columna de cada campo */
+function mapearPlanta(m){
+  var mejor=null;
+  for(var i=0;i<Math.min(m.length,15);i++){
+    var fila=(m[i]||[]).map(normEnc);
+    var map={}, hit=0;
+    PLANTA_COLS.forEach(function(c){
+      for(var j=0;j<fila.length;j++){
+        if(map[c.k]!==undefined) break;
+        for(var k=0;k<c.pats.length;k++){
+          if(fila[j].indexOf(normEnc(c.pats[k]))>=0){ map[c.k]=j; hit++; break; }
+        }
+      }
+    });
+    if(map.cedula!==undefined && map.nombre!==undefined && (!mejor||hit>mejor.hit))
+      mejor={fila:i, map:map, hit:hit};
+  }
+  return mejor;
+}
+
+/* Fecha desde una celda del Excel: puede venir como Date, como serial de
+   Excel o como texto. El texto de este libro es dd/mm/aaaa: en la
+   caracterizacion de octubre de 2026, de 121 fechas en texto, 74 tienen el
+   primer componente mayor que 12 y ninguna el segundo, y 120 de 121 coinciden
+   con la columna ANTIGUEDAD leidas como dia/mes. */
+function fechaCelda(v){
+  if(v===null||v===undefined||v==='') return null;
+  /* Fecha de Excel. Se comprueba por los metodos y no con instanceof, porque
+     la libreria puede construir el Date en otro contexto y alli instanceof
+     devuelve falso aunque el objeto si sea una fecha. */
+  if(v && typeof v.getFullYear==='function' && typeof v.getMonth==='function'
+     && !isNaN(v.getTime())){
+    return {d:v.getDate(), m:v.getMonth()+1, a:v.getFullYear()};
+  }
+  /* Serial de Excel (dias desde el 30/12/1899) */
+  if(typeof v==='number' && v>20000 && v<60000){
+    var d2=new Date(Math.round((v-25569)*86400000));
+    return {d:d2.getUTCDate(), m:d2.getUTCMonth()+1, a:d2.getUTCFullYear()};
+  }
+  return parseFechaCol(String(v));
+}
+
+/* Regimen a partir del estado administrativo y del nivel del empleo.
+   En la caracterizacion de octubre de 2026: 32 con CONTRATO DE TRABAJO y 34
+   en nivel TRABAJADOR OFICIAL; la planilla PILA de oficiales trae 32
+   afiliados, de modo que los dos restantes corresponden a vacantes. */
+function regimenPlanta(estado,nivel){
+  var e=normEnc(estado), v=normEnc(nivel);
+  if(e.indexOf('CONTRATO DE TRABAJO')>=0 || v.indexOf('TRABAJADOR OFICIAL')>=0)
+    return 'oficial';
+  return 'publico';
+}
+
+/* Numero en formato colombiano: punto de miles y coma decimal */
+function aNumero(x){
+  if(typeof x==='number') return isFinite(x)?x:0;
+  var y=String(x===undefined||x===null?'':x).trim();
+  if(!y) return 0;
+  y=y.replace(/,(\d{1,2})$/,'.$1');          /* coma decimal final */
+  y=y.replace(/\.(?=\d{3}(\D|$))/g,'');      /* puntos de miles */
+  y=y.replace(/[^\d.]/g,'');
+  var k=parseFloat(y);
+  return isFinite(k)?k:0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * ASIGNACION BASICA Y GASTOS DE REPRESENTACION
+ *
+ * Son dos factores distintos y KACTUS los liquida en conceptos separados:
+ * 101 asignacion basica y 102 gastos de representacion. Ambos son factor de
+ * salario conforme al articulo 42 del Decreto 1042 de 1978, de modo que los
+ * dos entran al IBC y a la base prestacional; el 102, en cambio, NO entra a
+ * la base de retencion, y por eso el Prototipo 102 lo excluye.
+ *
+ * En la caracterizacion de octubre de 2026 el Gobernador tiene los dos
+ * valores en una sola celda de texto: "18.249.487 + gastos de
+ * representacion 881.278". Mientras la DTH no abra la columna, se separan
+ * aqui: el primer numero es la asignacion y el segundo los gastos. La celda
+ * mezclada queda contada en el diagnostico de la carga, para pedir que se
+ * corrija en el origen.
+ * ─────────────────────────────────────────────────────────────────────── */
+function partirSueldo(v,vGR){
+  var gr=aNumero(vGR);
+  if(typeof v==='number') return {basica:v, gastos:gr, mezclado:false};
+  var t=String(v===undefined||v===null?'':v);
+  if(!t.trim()) return {basica:0, gastos:gr, mezclado:false};
+  var crudos=t.match(/\d[\d.,]*/g)||[];
+  var nums=[];
+  crudos.forEach(function(x){ var k=aNumero(x); if(k>=1000) nums.push(k); });
+  if(/representac/i.test(t) && nums.length>=2)
+    return {basica:nums[0], gastos:(gr||nums[1]), mezclado:true};
+  return {basica:nums[0]||0, gastos:gr, mezclado:false};
+}
+
+/* Carga la caracterizacion desde el libro de la DTH */
+function loadPlantaXlsx(buf,nombreArchivo){
+  var wb;
+  try{ wb=XLSX.read(new Uint8Array(buf),{type:'array',cellDates:true}); }
+  catch(err){ S.error='No se pudo leer el archivo de Excel: '+err.message; render(); return; }
+
+  var mapa={}, n=0, sinFecha=0, conArl=0, vacantes=0, textoFecha=0;
+  var mezclados=0, conGR=0;
+  var porReg={publico:0, oficial:0};
+  var retiros=[], hojasLeidas=[];
+
+  wb.SheetNames.forEach(function(hn){
+    var m=XLSX.utils.sheet_to_json(wb.Sheets[hn],{header:1,raw:true,defval:''});
+    var h=mapearPlanta(m);
+    if(!h) return;
+    var esDesv=/DESVINCUL|RETIR/.test(normEnc(hn));
+    var leidas=0;
+    for(var i=h.fila+1;i<m.length;i++){
+      var r=m[i]||[];
+      function g(k){ return h.map[k]!==undefined?r[h.map[k]]:''; }
+      var ced=String(g('cedula')||'').replace(/[^\d]/g,'');
+      var nom=String(g('nombre')||'').trim();
+      if(!ced){ if(nom) vacantes++; continue; }
+      var crudo=g('ingreso');
+      var f=fechaCelda(crudo);
+      if(typeof crudo==='string' && crudo.trim() && f) textoFecha++;
+      if(esDesv){
+        retiros.push({cedula:ced, nombre:nom, ingreso:f,
+          retiro:fechaCelda(g('retiro')),
+          novedad:String(g('novedad')||'').trim(),
+          cargo:String(g('cargo')||'').trim()});
+        leidas++; continue;
+      }
+      if(!f) sinFecha++;
+      var cl=normClaseARL(g('arl'));
+      if(cl) conArl++;
+      var reg=regimenPlanta(g('estado'),g('nivel'));
+      porReg[reg]++;
+      var sld=partirSueldo(g('sueldo'),g('gastosRep'));
+      if(sld.mezclado) mezclados++;
+      if(sld.gastos>0) conGR++;
+      mapa[ced]={
+        nombre:nom, ingreso:f, ingresoTxt:String(crudo||'').trim(),
+        cargo:String(g('cargo')||'').trim(),
+        codigo:String(g('codigo')||'').trim(),
+        grado:String(g('grado')||'').trim(),
+        nivel:String(g('nivel')||'').trim(),
+        dependencia:String(g('dependencia')||g('secretaria')||'').trim(),
+        vinculacion:String(g('estado')||'').trim(),
+        regimen:reg,
+        sueldo:sld.basica, gastosRep:sld.gastos, sueldoMezclado:sld.mezclado,
+        sueldoTxt:String(g('sueldo')||'').trim(),
+        arl:cl, arlTxt:String(g('arl')||'').trim()
+      };
+      n++; leidas++;
+    }
+    if(leidas) hojasLeidas.push(hn+' ('+leidas+')');
+  });
+
+  if(!n){
+    S.error='No se reconoció ningún servidor. El libro debe tener una fila de '+
+      'encabezados con al menos las columnas CÉDULA, NOMBRE Y APELLIDO y '+
+      'FECHA DE INGRESO.';
+    render(); return;
+  }
+  S.planta=mapa;
+  S.plantaRetiros=retiros;
+  S.plantaFuente=n+' servidores'+
+    ' · '+porReg.publico+' públicos / '+porReg.oficial+' oficiales'+
+    (sinFecha?' · '+sinFecha+' sin fecha de ingreso':'')+
+    (vacantes?' · '+vacantes+' vacante(s) sin cédula':'')+
+    (retiros.length?' · '+retiros.length+' desvinculado(s)':'')+
+    (conArl?' · '+conArl+' con clase de riesgo':'')+
+    (conGR?' · '+conGR+' con gastos de representación':'');
+  S.plantaArchivo=nombreArchivo||'';
+  S.plantaDiag={total:n, sinFecha:sinFecha, vacantes:vacantes, textoFecha:textoFecha,
+    conArl:conArl, retiros:retiros.length, porReg:porReg, hojas:hojasLeidas,
+    mezclados:mezclados, conGR:conGR};
+  S.error='';
+  if(S.data) recompute();
+  S.guardado.pendiente=true; guardarEstado(); render();
+}
+
+/* Interrupciones que suspenden la prestación del servicio y corren la fecha
+   de causación: licencias no remuneradas, suspensiones disciplinarias,
+   comisiones sin remuneración. No figuran en ningún reporte del sistema, por
+   lo que se capturan manualmente.
+   Formato por línea:  cédula · tipo · desde · hasta
+   Ejemplo: 4184305 LICENCIA NO REMUNERADA 01/03/2024 15/04/2024          */
+function parseInterrupciones(texto){
+  var out=[];
+  (texto||'').split(/\r?\n/).forEach(function(ln){
+    var s=ln.trim();
+    if(!s||/^#/.test(s)) return;
+    var ced=(s.match(/^(\d{5,12})/)||[])[1];
+    if(!ced) return;
+    var fechas=s.match(/\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}/g)||[];
+    if(fechas.length<2) return;
+    var d1=parseFechaCol(fechas[0]), d2=parseFechaCol(fechas[1]);
+    if(!d1||!d2) return;
+    var f1=new Date(d1.a,d1.m-1,d1.d), f2=new Date(d2.a,d2.m-1,d2.d);
+    var dias=Math.round((f2-f1)/86400000)+1;
+    if(dias<=0) return;
+    var tipo=s.replace(/^\d{5,12}\s*/,'')
+      .replace(/\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}/g,'')
+      .replace(/[·|,-]+/g,' ').replace(/\s+/g,' ').trim();
+    out.push({cedula:ced, tipo:tipo||'Interrupción', desde:fechas[0], hasta:fechas[1], dias:dias});
+  });
+  return out;
+}
+
+/* Días de interrupción acumulados de un servidor */
+function diasInterrumpidos(cedula){
+  if(!S.interrupciones||!S.interrupciones.length) return 0;
+  var c=String(cedula), d=0;
+  S.interrupciones.forEach(function(x){ if(x.cedula===c) d+=x.dias; });
+  return d;
+}
+
+/* Antigüedad a la fecha de corte del período auditado */
+function antiguedadDe(cedula,per){
+  var p=S.planta&&S.planta[String(cedula)];
+  if(!p||!p.ingreso||!per) return null;
+  var f=p.ingreso;
+
+  /* Las interrupciones no computan como tiempo de servicio: corren la fecha
+     de causación tantos días como haya durado la suspensión. */
+  var interr=diasInterrumpidos(cedula);
+  var efectiva=new Date(f.a,f.m-1,f.d);
+  if(interr) efectiva.setDate(efectiva.getDate()+interr);
+  var fa=efectiva.getFullYear(), fm=efectiva.getMonth()+1, fd=efectiva.getDate();
+
+  var meses=(per.anio-fa)*12+(per.mes-fm);
+  if(per.mes===fm && fd>30) meses--;        /* aún no cumple el mes */
+  if(meses<0) return null;
+  return {anios:Math.floor(meses/12), meses:meses%12, totalMeses:meses,
+    mesAniversario:fm, diaIngreso:fd, ingreso:p.ingresoTxt,
+    interrumpidos:interr,
+    aniversarioEfectivo:String(fd).padStart(2,'0')+'/'+String(fm).padStart(2,'0')};
+}
+
+/* Verificación de la bonificación por servicios contra el aniversario */
+function verificarBSP(){
+  if(!S.computed||!S.planta||!Object.keys(S.planta).length) return null;
+  var per=S.computed.periodo;
+  if(!per) return null;
+  var corresponde=[], pagadaFuera=[], sinPagar=[], ok=[], sinDato=0;
+  S.computed.rows.forEach(function(r){
+    var a=antiguedadDe(r.cedula,per);
+    var pago=(r.c['114']||0)>0;
+    if(!a){ if(pago) sinDato++; return; }
+    var esAniversario=(a.mesAniversario===per.mes);
+    var cumpleAnio=(a.totalMeses>=12);
+    if(esAniversario&&cumpleAnio){
+      corresponde.push(r);
+      if(pago) ok.push(r); else sinPagar.push({r:r,a:a});
+    } else if(pago){
+      pagadaFuera.push({r:r,a:a});
+    }
+  });
+  return {corresponde:corresponde, ok:ok, sinPagar:sinPagar,
+          pagadaFuera:pagadaFuera, sinDato:sinDato};
+}
+
+/* Vacaciones causadas: un período por cada año cumplido */
+function vacacionesCausadas(cedula,per){
+  var a=antiguedadDe(cedula,per);
+  if(!a) return null;
+  return {periodos:a.anios, mesesExtra:a.meses,
+    diasProporcionales:Math.round(a.meses*15/12)};
 }
 
 /* =========================================================================
@@ -1400,6 +2037,7 @@ function diagnosticarRetencion(e,n,P){
 function recompute(){
   if(!S.data||!S.data.employees){S.computed=null;return;}
   var P=S.P, emps=S.data.employees;
+  S.arlPILA=mapaARLdesdePILA();     /* debe quedar antes de calcEmpleado */
   var rows=[];
   var tot={devArch:0,ssArch:0,ssNorm:0,retArch:0,retNorm:0};
   var cnts={NORMAL:0,VACACIONES:0,INCAPACIDAD:0};
@@ -2813,6 +3451,14 @@ function exportXlsx(){
   var D0=8;                 /* primera fila en DATOS REFERENCIA */
   var wb=XLSX.utils.book_new();
   var DP="'DATOS PRENÓMINA'!", DR="'DATOS REFERENCIA'!", PA='PARÁMETROS!';
+  /* Indice de la planilla cargada, por cedula: alimenta las columnas de
+     conciliacion PILA del libro con los valores reales del operador en vez
+     de dejarlas en blanco para digitar. */
+  var pIdx={}; (S.pilaDet||[]).forEach(function(x){ pIdx[String(x.cedula)]=x; });
+  function plv(ced,k){
+    var x=pIdx[String(ced)];
+    return (x&&x[k]!==null&&x[k]!==undefined)?x[k]:'';
+  }
 
   /* Verdadero si la fila de PARÁMETROS tiene valor en B (es un parámetro,
      no un encabezado de sección) */
@@ -2942,7 +3588,20 @@ function exportXlsx(){
     ['TABLA ART. 383 E.T.',''],
     ['Desde UVT','Hasta UVT','Tarifa'],
     [0,95,0],[95,150,0.19],[150,360,0.28],[360,640,0.33],
-    [640,945,0.35],[945,2300,0.37],[2300,999999,0.39]
+    [640,945,0.35],[945,2300,0.37],[2300,999999,0.39],
+    [''],
+    ['CLASES DE RIESGO ARL (Dec. 1072/2015, art. 2.2.4.3.5)',''],
+    ['Clase','Tarifa inicial','Mínima','Máxima'],
+    ['I',   0.00522, 0.00348, 0.00696],
+    ['II',  0.01044, 0.00435, 0.01653],
+    ['III', 0.02436, 0.00783, 0.04089],
+    ['IV',  0.04350, 0.01740, 0.06960],
+    ['V',   0.06960, 0.03219, 0.08700],
+    [''],
+    ['La tarifa de riesgos laborales se fija por centro de trabajo, no por entidad.'],
+    ['La columna H de DATOS REFERENCIA recibe la clase de cada servidor y la I la'],
+    ['convierte en tarifa con esta tabla. El parámetro de la fila 46 se usa únicamente'],
+    ['cuando la clase no viene ni en la planilla PILA ni en la caracterización de planta.']
   ];
   XLSX.utils.book_append_sheet(wb, pintar(hojaConFormulas(pm),{
     estilo:function(R,C,cel){
@@ -2954,6 +3613,7 @@ function exportXlsx(){
         fill:(C===1&&ws_pmB(pm,R))?XS.editable:null});
     },
     formato:function(R,C){
+      if(R>=62&&R<=66&&C>=1&&C<=3) return FMT.pct;   /* clases de riesgo ARL */
       if(C!==1||R<3) return null;
       var u=(pm[R]&&pm[R][2])||'';
       return u==='%'?FMT.pct:(u==='$'?FMT.pesos:null);
@@ -3089,6 +3749,10 @@ function exportXlsx(){
     ['2. Cargue la prenómina del nuevo período. El IBC del mes anterior se aplicará solo.'],
     ['3. Verifique en PARÁMETROS que el SMLMV y la UVT correspondan a la vigencia.'],
     ['4. Cargue la planilla PILA y, si hubo ingresos o retiros, las novedades de planta.'],
+    ['   La planilla es además la fuente de la tarifa de ARL de cada servidor: la trae por'],
+    ['   afiliado, y sin ella el libro aplica el parámetro general, que casi nunca es la'],
+    ['   tarifa real (Decreto 1072 de 2015, art. 2.2.4.3.5 — la tarifa la fija el centro'],
+    ['   de trabajo, no la entidad).'],
     ['5. Revise los hallazgos en Elaborar informe y marque la casilla de revisión.'],
     ['6. La verificación previa le dirá si puede entregar. No la omita.'],
     [''],
@@ -3129,10 +3793,16 @@ function exportXlsx(){
      '118 Indemniz.Vacac.','119 Bonif.Dirección',
      'Días 101','Días novedad','Devengado Total','Descuento Total','Neto',
      '526 Aporte vol.pens.','550 AFC','Salud prepagada (562+888+896)',
-     '508 Embargo alimentos','521 Embargo comercial','Libranzas','Otros descuentos']
+     '508 Embargo alimentos','521 Embargo comercial','Libranzas','Otros descuentos',
+     'Otros Prot.101','IBC ant. prorrateado','Regla del IBC']
   ];
   /* Códigos agrupados a partir del mapa de conceptos */
   var C_PREP=['562','888','896'], C_LIB=codigosPorTipo('LIBRANZA'), C_VOL=codigosPorTipo('VOL');
+  /* Conceptos del Prototipo 101 que no tienen columna propia en esta hoja.
+     Sin ellos el IBC del libro no sería la suma del prototipo sino la de
+     cuatro conceptos, y de ahí salían diferencias contra la planilla. */
+  var P101_COL=['101','102','114','146'];
+  var P101_OTROS=[]; P101.forEach(function(k){ if(P101_COL.indexOf(k)<0) P101_OTROS.push(k); });
   rows.forEach(function(r){
     var c=r.c, q=r.q||{};
     var dNov=(q['107']||0)+(q['139']||0)+(q['141']||0)+(q['148']||0)+
@@ -3148,11 +3818,14 @@ function exportXlsx(){
       q['101']||0, dNov,
       r.totDev||0,r.totDesc||0,r.totNeto||0,
       c['526']||0, c['550']||0, suma(C_PREP),
-      c['508']||0, c['521']||0, suma(C_LIB), suma(C_VOL)]);
+      c['508']||0, c['521']||0, suma(C_LIB), suma(C_VOL),
+      suma(P101_OTROS),
+      (r.norma&&r.norma.ibcDet)?r.norma.ibcDet.porNovedad:0,
+      (r.norma&&r.norma.ibcDet)?r.norma.ibcDet.regla:'']);
   });
   XLSX.utils.book_append_sheet(wb, estilizar(XLSX.utils.aoa_to_sheet(dp),{
-    hdr:4, textoEn:[0,1,2,3,4],
-    anchos:[11,26,24,26,8,12].concat(Array(32).fill(11)),
+    hdr:4, textoEn:[0,1,2,3,4,40],
+    anchos:[11,26,24,26,8,12].concat(Array(32).fill(11)).concat([13,15,46]),
     congelar:{xSplit:2,ySplit:5},
     filtro:'A5:'+XLSX.utils.encode_col(dp[4].length-1)+String(F0-1+N)
   }), 'DATOS PRENÓMINA');
@@ -3168,7 +3841,8 @@ function exportXlsx(){
     ['manualmente desde los certificados de retención para que se calcule el % fijo del Proc. 2.'],
     [''],
     ['Cédula','Nombre','IBC mes anterior ('+etqPrev+')','Base gravable anual (acum.)',
-     'Ingreso mensual /13','% Fijo Proc.2','Fuente']
+     'Ingreso mensual /13','% Fijo Proc.2','Fuente',
+     'Clase riesgo ARL','Tarifa ARL','Fuente tarifa']
   ];
   rows.forEach(function(r,i){
     var f=D0+i;
@@ -3186,13 +3860,31 @@ function exportXlsx(){
           '('+u+'-2300)*0.39+770))))))';
         return '=IF(N(E'+f+')=0,"",IFERROR(('+tabla+')*'+PA+'$B$7/E'+f+',""))';
       })(),
-      prevH?('Histórico '+etqPrev):(S.ibcMesLabel||'Ingreso manual')]);
+      prevH?('Histórico '+etqPrev):(S.ibcMesLabel||'Ingreso manual'),
+      /* Clase de riesgo: romano I..V, arábigo 1..5 o la tarifa directa */
+      (function(){
+        var t=r.norma&&r.norma.arlTarifa;
+        if(!t||t.fuente==='Parametro por defecto') return '';
+        var m=String(t.clase||'').match(/Clase\s+(I{1,3}|IV|V)$/);
+        return m?m[1]:(t.tasa*100).toFixed(3);
+      })(),
+      '=IF(H'+f+'="",'+PA+'$B$46,IF(ISNUMBER(H'+f+'),IF(H'+f+'>1,H'+f+'/100,'+
+        'IF(H'+f+'>=0.1,H'+f+'/100,H'+f+')),IFERROR(VLOOKUP(H'+f+','+PA+
+        '$A$63:$B$67,2,FALSE),'+PA+'$B$46)))',
+      (function(){
+        var t=r.norma&&r.norma.arlTarifa;
+        return t?({'Planilla PILA':'Planilla PILA','Planta':'Caracterización de planta'}
+          [t.fuente]||'Parámetro por defecto'):'Parámetro por defecto';
+      })()]);
   });
   XLSX.utils.book_append_sheet(wb, estilizar(hojaConFormulas(dr),{
-    hdr:6, textoEn:[0,1,6],
-    editable:function(R,C){ return R>6&&(C===2||C===3); },
-    formato:function(R,C){ return C===5?FMT.pct:((C===2||C===3||C===4)?FMT.pesos:null); },
-    anchos:[12,28,20,22,16,12,26], congelar:{xSplit:2,ySplit:7}
+    hdr:6, textoEn:[0,1,6,7,9],
+    editable:function(R,C){ return R>6&&(C===2||C===3||C===7); },
+    formato:function(R,C){
+      if(C===5||C===8) return FMT.pct;
+      return (C===2||C===3||C===4)?FMT.pesos:null;
+    },
+    anchos:[12,28,20,22,16,12,26,14,11,24], congelar:{xSplit:2,ySplit:7}
   }), 'DATOS REFERENCIA');
 
   /* ═══════════ 5. REVISIÓN NORMATIVA (todo por fórmula) ═══════════ */
@@ -3206,7 +3898,8 @@ function exportXlsx(){
             [48,52,XS.secBSP,'③ BONIFICACIÓN POR SERVICIOS'],
             [53,64,XS.secRetP1,'④ RETENCIÓN EN LA FUENTE'],
             [65,67,XS.secPILA,'⑤ CONCILIACIÓN PILA'],
-            [68,83,XS.secRetP2,'⑥ DEDUCCIONES Y CONTROL DE DESCUENTOS']];
+            [68,83,XS.secRetP2,'⑥ DEDUCCIONES Y CONTROL DE DESCUENTOS'],
+            [84,87,XS.secParaf,'⑦ RIESGOS LABORALES POR CLASE DE RIESGO']];
   var filaSecc=[];
   SECC.forEach(function(s){
     for(var k=s[0];k<=s[1];k++) filaSecc[k]=(k===s[0])?s[3]:'';
@@ -3236,7 +3929,8 @@ function exportXlsx(){
      'Ret. P1 con deducciones','Menor retención por deducciones',
      'Embargo alimentos','Tope 50% salario','¿Alimentos OK?',
      'Embargo comercial','Tope 1/5 exceso SMLMV','¿Comercial OK?',
-     'Libranzas','Tope 50% neto','¿Libranza OK?']
+     'Libranzas','Tope 50% neto','¿Libranza OK?',
+     'Clase riesgo','Tarifa ARL','ARL esperado','Fuente tarifa']
   ];
   for(var i=0;i<N;i++){
     var f=R0+i;            /* fila en REVISIÓN NORMATIVA */
@@ -3258,8 +3952,18 @@ function exportXlsx(){
       '='+DP+'U'+d,'='+DP+'V'+d,'='+DP+'W'+d,'='+DP+'X'+d,'='+DP+'AC'+d,
       /* IBC */
       '='+DR+'C'+e,
-      '=G'+f+'+K'+f+'+L'+f+'+M'+f,
-      '=IF(AND(D'+f+'<>"NORMAL",W'+f+'>0),W'+f+',X'+f+')',
+      /* Prototipo 101 completo: los cuatro conceptos con columna propia mas
+         el resto de los conceptos del prototipo, agrupados en DATOS
+         PRENOMINA. */
+      '=G'+f+'+K'+f+'+L'+f+'+M'+f+'+'+DP+'AM'+d,
+      /* IBC aplicable. Sin novedad, el prototipo. Con novedad, los dias de
+         novedad al IBC del mes anterior prorrateado y los laborados por el
+         prototipo (Dec. 1406/1999 art. 1); si la novedad cubre el mes o los
+         dias no cuadran, el IBC anterior completo. */
+      '=IF(OR(D'+f+'="NORMAL",W'+f+'<=0),X'+f+','+
+        'IF(AND(E'+f+'>0,E'+f+'<30,'+DP+'AA'+d+'>0,E'+f+'+'+DP+'AA'+d+'<=31),'+
+          'ROUND(W'+f+'*E'+f+'/30,0)+X'+f+','+
+        'W'+f+'))',
       '=ROUND(MIN(Y'+f+','+PA+'$B$9)*'+PA+'$B$23,-2)','=R'+f,
       '=ROUND(MIN(Y'+f+','+PA+'$B$9)*'+PA+'$B$25,-2)','=S'+f,
       '=Y'+f+'/'+PA+'$B$5',
@@ -3302,7 +4006,7 @@ function exportXlsx(){
       '=IF(ISNUMBER(BK'+f+'),IF(ABS(BL'+f+'-BK'+f+')<='+PA+'$B$49,"✓ OK (P2)",'+
         'IF(ABS(BL'+f+'-BI'+f+')<='+PA+'$B$49,"✓ OK (P1)","✗ REVISAR")),'+
         'IF(ABS(BL'+f+'-BI'+f+')<='+PA+'$B$49,"✓ OK (P1)","✗ REVISAR"))',
-      '','',
+      plv(rows[i].cedula,'ibcSalud'), plv(rows[i].cedula,'ibcPen'),
       '=IF(BN'+f+'>0,IF(ABS(BN'+f+'-Y'+f+')<='+PA+'$B$48,"✓ OK","✗ REVISAR"),"PENDIENTE")',
       /* Deducciones y rentas exentas presentes en la nómina que el sistema no resta */
       '='+DP+'AF'+d,
@@ -3327,7 +4031,12 @@ function exportXlsx(){
       '=IF(CA'+f+'=0,"N/A",IF(CA'+f+'<=CB'+f+'+1000,"✓ OK","✗ EXCEDE"))',
       '='+DP+'AK'+d+'+'+DP+'AL'+d,
       '=ROUND((V'+f+'-R'+f+'-S'+f+'-T'+f+')*0.5,-2)',
-      '=IF(CD'+f+'=0,"N/A",IF(CD'+f+'<=CE'+f+'+1000,"✓ OK","✗ EXCEDE"))'
+      '=IF(CD'+f+'=0,"N/A",IF(CD'+f+'<=CE'+f+'+1000,"✓ OK","✗ EXCEDE"))',
+      /* ⑦ ARL: la tarifa sale de DATOS REFERENCIA, columna I */
+      '=IF('+DR+'H'+e+'="","",'+DR+'H'+e+')',
+      '='+DR+'I'+e,
+      '=ROUND(MIN(Y'+f+','+PA+'$B$9)*CH'+f+',-2)',
+      '='+DR+'J'+e
     ]);
   }
   /* Fila de totales */
@@ -3354,7 +4063,8 @@ function exportXlsx(){
     '=SUM(BQ'+R0+':BQ'+fin+')','=SUM(BR'+R0+':BR'+fin+')','=SUM(BS'+R0+':BS'+fin+')','',
     '=SUM(BU'+R0+':BU'+fin+')','=SUM(BV'+R0+':BV'+fin+')','=SUM(BW'+R0+':BW'+fin+')',
     '=SUM(BX'+R0+':BX'+fin+')','','','=SUM(CA'+R0+':CA'+fin+')','','',
-    '=SUM(CD'+R0+':CD'+fin+')','',''];
+    '=SUM(CD'+R0+':CD'+fin+')','','',
+    '','','=SUM(CI'+R0+':CI'+fin+')',''];
   rn.push(tot);
   var wsRN=hojaConFormulas(rn);
   /* Rangos de sección: se pintan como en el formato de referencia */
@@ -3364,7 +4074,7 @@ function exportXlsx(){
   }
   /* Columnas cuyo valor se trae de otra hoja: van en verde, como el modelo */
   var COL_VINC={1:1,2:1,4:1,5:1,6:1,7:1,8:1,9:1,10:1,11:1,12:1,13:1,15:1,16:1,
-                17:1,18:1,19:1,20:1,21:1,22:1};
+                17:1,18:1,19:1,20:1,21:1,22:1,84:1,85:1,87:1};
   pintar(wsRN,{
     estilo:function(R,C,cel){
       if(R===0) return estTitulo(12);
@@ -3372,7 +4082,8 @@ function exportXlsx(){
       if(R===2) return estSeccion(colorSeccion(C));
       if(R===3) return estEncabezado();
       if(R===R0-1+N) return estTotal();              /* fila de totales */
-      var esTxt=(C===2||C===3||C===37||C===38||C===52||C===64||C===67);
+      var esTxt=(C===2||C===3||C===37||C===38||C===52||C===64||C===67||
+                 C===84||C===87);
       return estDato({
         color: COL_VINC[C]?XS.txtVinculado:XS.txtCalculado,
         al: esTxt?'left':'right',
@@ -3383,14 +4094,16 @@ function exportXlsx(){
       if(R<4) return null;
       if(C===0||C===4) return FMT.ent;
       if(C===29||C===58) return FMT.dec;            /* IBC/SMMLV y Base UVT */
-      if(C===30||C===48||C===60) return FMT.pct;    /* tarifas y porcentajes */
-      if(C===2||C===3||C===37||C===38||C===52||C===64||C===67) return null;
+      if(C===30||C===48||C===60||C===85) return FMT.pct;  /* tarifas */
+      if(C===2||C===3||C===37||C===38||C===52||C===64||C===67||
+         C===84||C===87) return null;
       return FMT.pesos;
     },
     anchos:[4,11,26,12,8,11,10,10,10,10,11,10,10,10,11,10,10,10,10,10,10,12,
             11,11,11,11,11,11,11,8,7,11,11,10,10,10,10,14,11,13,13,12,11,10,
             11,10,10,13,7,11,11,11,13,13,12,11,10,11,12,9,11,8,11,11,12,11,
-            11,11,11,11,13,13,13,13,13,11,11,11,11,11,11,11,11,11],
+            11,11,11,11,13,13,13,13,13,11,11,11,11,11,11,11,11,11,
+            12,10,12,24],
     filtro:'A4:'+XLSX.utils.encode_col(rn[3].length-1)+String(R0-1+N),
     combinar:SECC.map(function(s){
       return {s:{r:2,c:s[0]}, e:{r:2,c:s[1]}};
@@ -3468,28 +4181,101 @@ function exportXlsx(){
     anchos:[42,20,10,46]
   }), 'RESUMEN');
 
+  /* ═══════════ 6-bis. CRUCE ESPEJO CONTRA LA PLANILLA ═══════════
+     Una fila por servidor: lo que exige la norma contra lo que liquido el
+     operador, con la diferencia calculada en el propio libro. */
+  if(S.pilaDet&&S.pilaDet.length){
+    var ce=[
+      ['CRUCE ESPEJO · PRENÓMINA KACTUS vs PLANILLA PILA — '+perStr.toUpperCase()],
+      ['Archivo de la planilla: '+(S.pilaArchivo||'(sin nombre)')+' · '+
+       S.pilaDet.length+' registros consolidados.'],
+      ['La planilla liquida el aporte TOTAL de cada subsistema, no el descuento al'],
+      ['servidor: la columna de salud es el 12,5 % y la de pensión el 16 % más el FSP.'],
+      ['La columna «ARL norma» es el aporte del mes completo. En los servidores con'],
+      ['novedad la planilla liquida ARL al 0,000 % por esos días, de modo que la'],
+      ['diferencia de esa columna no es un error de cálculo sino un hecho por sustentar;'],
+      ['el dictamen de conformidad se forma con el IBC, la salud y la pensión.'],
+      [''],
+      ['Cédula','Nombre','Rengl.','Días','IBC normativo','IBC planilla','Dif. IBC',
+       'Salud norma (12,5%)','Salud planilla','Dif. salud',
+       'Pensión+FSP norma','Pensión planilla','Dif. pensión',
+       'ARL norma','ARL planilla','Dif. ARL',
+       'CCF norma','CCF planilla','Dif. CCF','¿Conforme?']
+    ];
+    var ceHdr=ce.length-1;      /* fila 0-based del encabezado */
+    var ceP0=ce.length+1;       /* primera fila de datos, 1-based */
+    rows.forEach(function(r,i){
+      var f=R0+i, L=ce.length+1;
+      var x=pIdx[String(r.cedula)];
+      ce.push([
+        '='+RN+'B'+f,'='+RN+'C'+f,
+        x?(x.renglones||1):'', x?(x.diasSal!==null?x.diasSal:''):'',
+        '='+RN+'Y'+f, plv(r.cedula,'ibcSalud'),
+        '=IF(N(F'+L+')=0,"",E'+L+'-F'+L+')',
+        '='+RN+'Z'+f+'+ROUND(MIN('+RN+'Y'+f+','+PA+'$B$9)*'+PA+'$B$24,-2)',
+        plv(r.cedula,'aporSalud'),
+        '=IF(N(I'+L+')=0,"",H'+L+'-I'+L+')',
+        '='+RN+'AB'+f+'+ROUND(MIN('+RN+'Y'+f+','+PA+'$B$9)*'+PA+'$B$26,-2)+'+RN+'AF'+f,
+        plv(r.cedula,'aporPen'),
+        '=IF(N(L'+L+')=0,"",K'+L+'-L'+L+')',
+        '='+RN+'CI'+f, plv(r.cedula,'aporArl'),
+        '=IF(N(O'+L+')=0,"",N'+L+'-O'+L+')',
+        '='+RN+'AQ'+f, plv(r.cedula,'aporCcf'),
+        '=IF(N(R'+L+')=0,"",Q'+L+'-R'+L+')',
+        '=IF(AND(OR(G'+L+'="",ABS(G'+L+')<='+PA+'$B$50),'+
+             'OR(J'+L+'="",ABS(J'+L+')<='+PA+'$B$50),'+
+             'OR(M'+L+'="",ABS(M'+L+')<='+PA+'$B$50)),"✓ OK","✗ REVISAR")'
+      ]);
+    });
+    var ceFin=ce.length;
+    var sm=function(col){ return '=SUM('+col+ceP0+':'+col+ceFin+')'; };
+    ce.push(['','TOTALES','','',
+      sm('E'),sm('F'),sm('G'),sm('H'),sm('I'),sm('J'),
+      sm('K'),sm('L'),sm('M'),sm('N'),sm('O'),sm('P'),
+      sm('Q'),sm('R'),sm('S'),'']);
+    XLSX.utils.book_append_sheet(wb, estilizar(hojaConFormulas(ce),{
+      hdr:ceHdr, textoEn:[0,1,19],
+      formato:function(R,C){
+        if(C===2||C===3) return FMT.ent;
+        return (C>=4&&C<=18)?FMT.pesos:null;
+      },
+      anchos:[12,26,7,7,15,15,13,16,15,13,17,15,13,13,13,12,13,13,12,13],
+      congelar:{xSplit:2,ySplit:ceHdr+1},
+      filtro:'A'+(ceHdr+1)+':T'+ceFin
+    }), 'CRUCE ESPEJO PILA');
+  }
+
   /* ═══════════ 7. NOVEDADES DEL PERÍODO ═══════════ */
   var nv=[
     ['NOVEDADES QUE ALTERAN EL IBC — '+perStr.toUpperCase()],
     ['Art. 1 Decreto 1406 de 1999: durante vacaciones, incapacidad o licencia, el IBC se'],
     ['toma del mes inmediatamente anterior. Esta hoja aísla los casos y su efecto.'],
     [''],
-    ['Cédula','Nombre','Novedad','Días','IBC mes anterior','IBC del mes',
-     'IBC aplicado','Efecto en el IBC','Salud esperada','Pensión esperada','FSP esperado','¿SS OK?']
+    ['Cédula','Nombre','Novedad','Días nov.','Días lab.','IBC mes anterior',
+     'IBC ant. × días/30','IBC Prot.101 (días lab.)','IBC aplicado',
+     'IBC PILA salud','Dif. contra PILA','Regla aplicada',
+     'Salud esperada','Pensión esperada','FSP esperado','¿SS OK?']
   ];
   var nvN=0;
   rows.forEach(function(r,i){
     if(r.nov==='NORMAL') return;
     var f=R0+i; nvN++;
-    nv.push(['='+RN+'B'+f,'='+RN+'C'+f,'='+RN+'D'+f,'='+RN+'E'+f,
-      '='+RN+'W'+f,'='+RN+'X'+f,'='+RN+'Y'+f,'='+RN+'Y'+f+'-'+RN+'X'+f,
+    var d=F0+i;
+    nv.push(['='+RN+'B'+f,'='+RN+'C'+f,'='+RN+'D'+f,'='+RN+'E'+f,'='+DP+'AA'+d,
+      '='+RN+'W'+f,'='+DP+'AN'+d,'='+RN+'X'+f,'='+RN+'Y'+f,
+      '='+RN+'BN'+f,'=IF(N(J'+(nvN+5)+')=0,"",I'+(nvN+5)+'-J'+(nvN+5)+')',
+      '='+DP+'AO'+d,
       '='+RN+'Z'+f,'='+RN+'AB'+f,'='+RN+'AF'+f,'='+RN+'AM'+f]);
   });
-  if(!nvN) nv.push(['','Sin novedades en el período','','','','','','','','','','']);
+  if(!nvN) nv.push(['','Sin novedades en el período','','','','','','','','','','','','','','']);
   XLSX.utils.book_append_sheet(wb, estilizar(hojaConFormulas(nv),{
-    hdr:4, textoEn:[0,1,2,11],
-    formato:function(R,C){ return C===3?FMT.ent:((C>=4&&C<=10)?FMT.pesos:null); },
-    anchos:[12,28,14,7,16,16,16,16,14,14,12,14], congelar:{ySplit:5}
+    hdr:4, textoEn:[0,1,2,11,15],
+    formato:function(R,C){
+      if(C===3||C===4) return FMT.ent;
+      return (C>=5&&C<=14)?FMT.pesos:null;
+    },
+    anchos:[12,26,13,8,8,16,16,18,16,16,15,46,14,14,12,13],
+    congelar:{xSplit:2,ySplit:5}
   }), 'NOVEDADES');
 
   /* ═══════════ 8. TRAZABILIDAD MENSUAL ═══════════ */
@@ -3608,7 +4394,7 @@ function exportXlsx(){
     ['Pensión + FSP','='+RN+'AB'+(fin+1)+'+'+RN+'AF'+(fin+1)+
       '+ROUND('+RN+'Y'+(fin+1)+'*'+PA+'$B$26,-2)',pn('pension'),
       '=B6-C6','=IF(C6=0,"PENDIENTE",IF(ABS(D6)<='+PA+'$B$50,"✓ OK","⚠ REVISAR"))'],
-    ['ARL','=ROUND('+RN+'Y'+(fin+1)+'*'+PA+'$B$46,-2)',pn('arl'),
+    ['ARL','='+RN+'CI'+(fin+1),pn('arl'),
       '=B7-C7','=IF(C7=0,"PENDIENTE",IF(ABS(D7)<='+PA+'$B$50,"✓ OK","⚠ REVISAR"))'],
     ['CCF','='+RN+'AQ'+(fin+1),pn('ccf'),
       '=B8-C8','=IF(C8=0,"PENDIENTE",IF(ABS(D8)<='+PA+'$B$50,"✓ OK","⚠ REVISAR"))'],
@@ -4251,8 +5037,65 @@ function vParaf(){
     }).join('')+
     '<tr class="row-total"><td><b>TOTAL PARAFISCALES</b></td><td></td><td class="mn"><b>'+cop(total)+'</b></td></tr>'+
     '</tbody></table></div>'+
-    '<h3 style="margin-top:20px">ARL</h3>'+
-    '<p style="font-size:13px">Total ARL (Clase V, 6.96%): <b>'+cop(C.pilaNN.arl)+'</b></p>'+
+    '<h3 style="margin-top:20px">Riesgos laborales por clase de riesgo</h3>'+
+    '<div class="info-box">'+
+      'La tarifa de ARL se fija <b>por centro de trabajo</b> según la actividad allí '+
+      'desarrollada (Decreto 1072 de 2015, artículo 2.2.4.3.5). Aplicar una tarifa única '+
+      'a toda la planta sobreestima el aporte: en octubre de 2026, 190 de los 223 '+
+      'afiliados de Empleados Públicos cotizaron al 0,522 %.'+
+    '</div>'+
+    (function(){
+      var A=resumenARL();
+      if(!A||!A.lista.length) return '<p style="font-size:13px">Sin datos.</p>';
+      return '<div class="tbl-wrap"><table class="tbl" style="max-width:640px">'+
+        '<thead><tr><th>Clase / tarifa</th><th>Tarifa</th><th>Servidores</th>'+
+        '<th>Base IBC</th><th>Aporte ARL</th><th>Fuente</th></tr></thead><tbody>'+
+        A.lista.map(function(g){
+          var dflt=(g.fuente==='Parametro por defecto');
+          return '<tr'+(dflt?' style="background:#FEF3C7"':'')+'>'+
+            '<td>'+esc(g.clase)+'</td><td>'+pct(g.tasa)+'</td>'+
+            '<td class="mn">'+g.n+'</td><td class="mn">'+cop(g.base)+'</td>'+
+            '<td class="mn">'+cop(g.aporte)+'</td><td>'+esc(g.fuente)+'</td></tr>';
+        }).join('')+
+        '<tr class="row-total"><td><b>TOTAL ARL</b></td><td></td>'+
+        '<td class="mn"><b>'+A.lista.reduce(function(a,x){return a+x.n;},0)+'</b></td>'+
+        '<td class="mn"><b>'+cop(A.base)+'</b></td>'+
+        '<td class="mn"><b>'+cop(A.aporte)+'</b></td><td></td></tr>'+
+        '</tbody></table></div>'+
+        (A.sinClase?'<div class="alerta-inline">'+A.sinClase+' servidor(es) sin clase de '+
+          'riesgo asignada: se les aplicó el parámetro general de '+pct(S.P.arl)+', que '+
+          'muy probablemente no es su tarifa. Cargue la planilla PILA del período o la '+
+          'columna de clase de riesgo en la caracterización de planta.</div>':'')+
+        (A.sinClase?'<div class="mini-note">Con tarifa única el aporte sería '+
+          cop(A.base*S.P.arl)+'; con las clases asignadas, '+cop(A.aporte)+'. '+
+          'Diferencia: '+cop(A.base*S.P.arl-A.aporte)+'.</div>':'')+
+        (function(){
+          var Z=arlNovedadSinCotizar();
+          if(!Z) return '';
+          return '<h3 style="margin-top:20px">Días de novedad sin cotización de ARL</h3>'+
+            '<div class="info-box" style="border-left-color:#D97706">'+
+              'En la planilla, <b>'+Z.casos.length+'</b> servidor(es) tienen días de '+
+              'novedad liquidados al 0,000 % de ARL —'+Z.dias+' días en total—. El '+
+              'cálculo normativo del mes completo arroja '+cop(Z.norma)+' y la planilla '+
+              'liquidó '+cop(Z.pagado)+': una diferencia de <b>'+cop(Z.dif)+'</b>. '+
+              'La aplicación no ajusta el cálculo por esto; lo deja cuantificado para '+
+              'que usted decida si el soporte de la novedad justifica la suspensión del '+
+              'aporte o si hay un menor pago que reclamar.'+
+            '</div>'+
+            '<div class="tbl-wrap"><table class="tbl" style="max-width:720px">'+
+            '<thead><tr><th>Cédula</th><th>Servidor</th><th>Días sin ARL</th>'+
+            '<th>ARL mes completo</th><th>ARL planilla</th><th>Diferencia</th>'+
+            '</tr></thead><tbody>'+
+            Z.casos.map(function(k){
+              return '<tr><td>'+esc(k.cedula)+'</td>'+
+                '<td class="td-nom">'+esc(k.nombre)+'</td>'+
+                '<td class="mn">'+k.dias+'</td>'+
+                '<td class="mn">'+cop(k.arlNorma)+'</td>'+
+                '<td class="mn">'+cop(k.arlPlanilla)+'</td>'+
+                '<td class="mn neg">'+cop(k.arlNorma-k.arlPlanilla)+'</td></tr>';
+            }).join('')+'</tbody></table></div>';
+        })();
+    })()+
   '</div>';
 }
 
@@ -4365,12 +5208,12 @@ function vPila(){
       '<span class="tb-count">'+muestra.length+' de '+tot+'</span></div>'+
       '<div class="tbl-wrap"><table class="tbl">'+
       '<thead><tr><th>Cédula</th><th>Servidor</th>'+
-      '<th>IBC salud KACTUS</th><th>IBC salud PILA</th><th>Dif.</th>'+
-      '<th>Aporte salud KACTUS</th><th>Aporte salud PILA</th><th>Dif.</th>'+
+      '<th>IBC salud norma</th><th>IBC salud PILA</th><th>Dif.</th>'+
+      '<th>Salud 12,5% norma</th><th>Salud PILA</th><th>Dif.</th>'+
       '<th>Estado</th><th>Conceptos con diferencia</th></tr></thead><tbody>'+
       muestra.map(function(f){
         function g(l){ for(var i=0;i<f.comps.length;i++) if(f.comps[i].lbl===l) return f.comps[i]; return null; }
-        var s=g('IBC salud'), a=g('Aporte salud');
+        var s=g('IBC salud'), a=g('Aporte salud (12,5%)');
         return '<tr'+(f.ok?'':' class="row-bad"')+'>'+
           '<td>'+esc(f.row.cedula)+'</td>'+
           '<td class="td-nom">'+esc(f.row.nombre)+'</td>'+
@@ -4388,6 +5231,62 @@ function vPila(){
       '<div class="mini-note">Tolerancia aplicada: '+cop(2000)+' por concepto. '+
       'Las columnas de ARL, CCF, pensión y FSP se comparan igualmente; la columna final '+
       'relaciona todos los conceptos con diferencia.</div>'+
+    '</div>';
+
+    /* ── Derivación del IBC desde los conceptos de la prenómina ──────────
+       El IBC no se toma de la planilla: se arma con los conceptos del
+       Prototipo 101 y, si hay novedad, con el IBC del mes anterior
+       prorrateado por los días de la novedad. Esta tabla deja la cadena a
+       la vista para poder rastrear de dónde sale cada peso. */
+    var conNov=X.filas.filter(function(f){
+      return f.row.nov!=='NORMAL' || (f.pila.renglones||1)>1;
+    });
+    cruce+='<div class="section">'+
+      '<h2>Derivación del IBC · conceptos del prototipo vs planilla</h2>'+
+      '<div class="info-box">'+
+        'El IBC no se copia de la planilla: se arma con los conceptos de la prenómina '+
+        'que pertenecen al <b>Prototipo 101</b>. Ese prototipo no incluye vacaciones '+
+        '(107) ni incapacidades (139, 141, 148), de modo que en un mes con novedad esa '+
+        'suma recoge solo los días laborados. Los días de novedad entran con el IBC del '+
+        'mes inmediatamente anterior, prorrateado (Decreto 1406 de 1999, artículo 1), '+
+        'que es como lo liquida el operador: por eso el servidor con novedad aparece en '+
+        'la planilla en dos renglones, cada uno con su propio IBC.'+
+      '</div>'+
+      (conNov.length?
+      '<div class="tbl-wrap"><table class="tbl">'+
+      '<thead><tr><th>Cédula</th><th>Servidor</th><th>Novedad</th>'+
+      '<th>Días nov.</th><th>Días lab.</th><th>IBC mes ant.</th>'+
+      '<th>Por novedad<br><span class="h3-note">ant. × días/30</span></th>'+
+      '<th>Prot. 101<br><span class="h3-note">días laborados</span></th>'+
+      '<th>IBC aplicado</th><th>IBC planilla</th><th>Dif.</th>'+
+      '<th>Rengl.</th><th>Regla aplicada</th></tr></thead><tbody>'+
+      conNov.map(function(f){
+        var D=f.row.norma.ibcDet||{};
+        var dif=Math.round((f.row.norma.ibcSS||0)-(f.pila.ibcSalud||0));
+        var ok=Math.abs(dif)<=2000;
+        return '<tr'+(ok?'':' class="row-bad"')+'>'+
+          '<td>'+esc(f.row.cedula)+'</td>'+
+          '<td class="td-nom">'+esc(f.row.nombre)+'</td>'+
+          '<td>'+esc(f.row.nov)+'</td>'+
+          '<td class="mn">'+(D.diasNov||0)+'</td>'+
+          '<td class="mn">'+(D.diasLab||0)+'</td>'+
+          '<td class="mn">'+cop(D.antMes||0)+'</td>'+
+          '<td class="mn">'+cop(D.porNovedad||0)+'</td>'+
+          '<td class="mn">'+cop(D.proto||0)+'</td>'+
+          '<td class="mn"><b>'+cop(f.row.norma.ibcSS)+'</b></td>'+
+          '<td class="mn">'+cop(f.pila.ibcSalud||0)+'</td>'+
+          '<td class="mn '+(ok?'':'neg')+'">'+cop(dif)+'</td>'+
+          '<td class="mn">'+(f.pila.renglones||1)+'</td>'+
+          '<td class="td-nota">'+esc(D.regla||'')+'</td>'+
+        '</tr>';
+      }).join('')+
+      '</tbody></table></div>'+
+      '<div class="mini-note">«Rengl.» es el número de renglones que la planilla trae '+
+      'para esa cédula. Dos renglones significan que el operador partió el mes entre los '+
+      'días de novedad y los días laborados; la aplicación los consolida y suma, porque '+
+      'son fracciones del mismo mes.</div>'
+      :'<p style="font-size:13px">Ningún servidor con novedad en el período, y ninguna '+
+       'cédula partida en varios renglones de la planilla.</p>')+
     '</div>';
   }
 
@@ -4871,7 +5770,147 @@ function vNovedades(){
       '</tbody></table></div>';
   }
 
-  return '<div class="section">'+
+  /* ── Caracterización de planta ── */
+  var nP=Object.keys(S.planta||{}).length;
+  var B=verificarBSP();
+  var panelPlanta='<div class="section">'+
+    '<h2>Caracterización de planta</h2>'+
+    '<div class="info-box">'+
+      'La fecha de ingreso determina cortes que no pueden verificarse sin ella. '+
+      'La bonificación por servicios prestados se causa <b>cada vez que el servidor '+
+      'cumple un año continuo de labor</b> (Decreto 1042 de 1978, artículo 45), y las '+
+      'vacaciones se causan por año de servicio (Decreto 1045 de 1978, artículo 8).'+
+    '</div>'+
+    '<div class="inf-actions">'+
+      '<label class="btn-add" style="cursor:pointer">↑ Cargar caracterización'+
+        '<input type="file" id="inp-planta" accept=".xlsx,.xlsm,.xls,.csv,.txt" '+
+        'style="display:none"></label>'+
+      (nP?'<button class="btn-reset" id="planta-clr">Quitar</button>':'')+
+      (S.plantaFuente?'<span class="tb-count">'+esc(S.plantaFuente)+'</span>':'')+
+    '</div>'+
+    '<div class="mini-note">'+
+      'Cargue directamente el <b>Excel de caracterización</b> que produce la Dirección '+
+      'de Talento Humano, tal como lo entrega. Las columnas se localizan por el texto '+
+      'del encabezado —CÉDULA, NOMBRE Y APELLIDO, FECHA DE INGRESO, DENOMINACIÓN DEL '+
+      'CARGO, GRADO, DEPENDENCIA, ESTADO ADMINISTRATIVO, SUELDO, GASTOS DE '+
+      'REPRESENTACIÓN—, así que el archivo '+
+      'sigue sirviendo si se reordenan o se agregan columnas. Del libro se leen solo '+
+      'esas: el correo y el teléfono personales, la dirección de residencia, el RH, la '+
+      'EPS, la AFP, el estrato, el grupo étnico y la condición de salud <b>no se leen '+
+      'ni se guardan</b>. También se admite un CSV con '+
+      '<code>Cédula,Nombre,Fecha ingreso,Cargo,Grado,Dependencia,Vinculación,'+
+      'Clase riesgo ARL,Asignación básica,Gastos de representación</code>.'+
+    '</div>'+
+    (S.plantaDiag?(function(){
+      var D=S.plantaDiag, av=[];
+      if(D.sinFecha) av.push(D.sinFecha+' servidor(es) sin fecha de ingreso legible: '+
+        'en ellos no puede verificarse la bonificación por servicios ni la causación '+
+        'de vacaciones.');
+      if(D.vacantes) av.push(D.vacantes+' registro(s) sin cédula, que corresponden a '+
+        'empleos vacantes y quedan fuera del cruce.');
+      if(D.textoFecha) av.push(D.textoFecha+' fecha(s) venían como texto y no como '+
+        'fecha de Excel; se leyeron como dd/mm/aaaa. Conviene corregir el formato en '+
+        'el libro de origen para evitar lecturas ambiguas.');
+      if(!D.conArl) av.push('El libro no trae columna de clase de riesgo de ARL. La '+
+        'tarifa se tomará de la planilla PILA del período, que la trae por afiliado.');
+      if(D.mezclados) av.push(D.mezclados+' celda(s) de sueldo traen la asignación '+
+        'básica y los gastos de representación juntos, en texto. Se separaron: el '+
+        'primer valor como asignación y el segundo como gastos. <b>Pida a la DTH una '+
+        'celda propia para los gastos de representación</b>: son factor de salario '+
+        '(Decreto 1042 de 1978, artículo 42) y KACTUS los liquida en el concepto 102, '+
+        'aparte del 101.');
+      if(!D.conGR) av.push('El libro no trae columna de gastos de representación. En '+
+        'los cargos que los devengan —Gobernador, secretarios de despacho— el '+
+        'concepto 102 no puede contrastarse contra nada.');
+      return '<div class="info-box" style="border-left-color:#0E9F6E;margin-top:14px">'+
+        '<b>Lectura del archivo'+(S.plantaArchivo?' '+esc(S.plantaArchivo):'')+'</b><br>'+
+        'Hojas leídas: '+esc((D.hojas||[]).join(' · '))+'. '+
+        (D.porReg?('Régimen derivado del estado administrativo y del nivel del empleo: '+
+          D.porReg.publico+' empleados públicos y '+D.porReg.oficial+
+          ' trabajadores oficiales. '):'')+
+        (D.retiros?('Se leyeron '+D.retiros+' desvinculados con su fecha de retiro. '):'')+
+        (av.length?'<br><br>'+av.map(function(x){return '• '+x;}).join('<br>'):'')+
+      '</div>';
+    })():'')+
+    /* ── Interrupciones: captura manual ── */
+    (nP?
+      '<h3 style="margin-top:18px">Interrupciones del servicio '+
+        '<span class="h3-note">(corren la fecha de causación)</span></h3>'+
+      '<div class="info-box">'+
+        'Las licencias no remuneradas, suspensiones y comisiones sin remuneración no '+
+        'computan como tiempo de servicio: corren el aniversario tantos días como hayan '+
+        'durado. No figuran en ningún reporte del sistema, por lo que se capturan aquí.<br>'+
+        '<b>Formato:</b> una línea por interrupción — cédula, tipo, fecha inicial y final.<br>'+
+        '<span style="color:#7A6D63"><code>4184305 LICENCIA NO REMUNERADA 01/03/2024 15/04/2024</code></span>'+
+      '</div>'+
+      '<textarea class="frm-ta" id="interr-txt" rows="5" placeholder="'+
+        '4184305 LICENCIA NO REMUNERADA 01/03/2024 15/04/2024&#10;'+
+        '74811756 SUSPENSION DISCIPLINARIA 10/08/2025 24/08/2025">'+esc(S.interrTexto)+'</textarea>'+
+      '<div class="inf-actions">'+
+        '<button class="btn-add" id="interr-proc">Procesar interrupciones</button>'+
+        (S.interrupciones.length?'<button class="btn-reset" id="interr-clr">Limpiar</button>':'')+
+        (S.interrupciones.length?'<span class="tb-count">'+S.interrupciones.length+
+          ' interrupción(es) · '+S.interrupciones.reduce(function(s,x){return s+x.dias;},0)+
+          ' días</span>':'')+
+      '</div>'+
+      (S.interrupciones.length?
+        '<div class="tbl-wrap"><table class="tbl">'+
+        '<thead><tr><th>Cédula</th><th>Servidor</th><th>Tipo</th><th>Desde</th>'+
+        '<th>Hasta</th><th>Días</th><th>Aniversario corrido a</th></tr></thead><tbody>'+
+        S.interrupciones.map(function(x){
+          var pl=S.planta[x.cedula];
+          var a=S.computed?antiguedadDe(x.cedula,S.computed.periodo):null;
+          return '<tr><td>'+esc(x.cedula)+'</td>'+
+            '<td class="td-nom">'+esc(pl?pl.nombre:'(no está en la planta)')+'</td>'+
+            '<td>'+esc(x.tipo)+'</td><td>'+esc(x.desde)+'</td><td>'+esc(x.hasta)+'</td>'+
+            '<td class="mn">'+x.dias+'</td>'+
+            '<td class="mn">'+(a&&a.aniversarioEfectivo?a.aniversarioEfectivo:'—')+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'')
+    :'')+
+
+    (B?
+      '<h3 style="margin-top:18px">Bonificación por servicios · aniversarios de '+esc(perStr)+'</h3>'+
+      '<div class="kpi-row">'+
+        kpi(B.corresponde.length,'Cumplen aniversario','blue','')+
+        kpi(B.ok.length,'Pagada correctamente','green','')+
+        kpi(B.sinPagar.length,'Corresponde y no se pagó',B.sinPagar.length?'red':'green','')+
+        kpi(B.pagadaFuera.length,'Pagada fuera de aniversario',B.pagadaFuera.length?'amber':'green','')+
+      '</div>'+
+      ((B.sinPagar.length||B.pagadaFuera.length)?
+        '<div class="tbl-wrap"><table class="tbl">'+
+        '<thead><tr><th>Cédula</th><th>Servidor</th><th>Ingreso</th><th>Antigüedad</th>'+
+        '<th>Mes aniversario</th><th>114 pagado</th><th>Observación</th></tr></thead><tbody>'+
+        B.sinPagar.map(function(x){
+          return '<tr class="row-bad"><td>'+esc(x.r.cedula)+'</td>'+
+            '<td class="td-nom">'+esc(x.r.nombre)+'</td>'+
+            '<td>'+esc(x.a.ingreso)+'</td>'+
+            '<td class="mn">'+x.a.anios+' años '+x.a.meses+' meses</td>'+
+            '<td class="mn">'+MESES[x.a.mesAniversario]+
+              (x.a.interrumpidos?' <span style="font-size:10px;color:#D97706">(corrido '+x.a.interrumpidos+'d)</span>':'')+'</td>'+
+            '<td class="mn">'+cop(x.r.c['114']||0)+'</td>'+
+            '<td class="td-nota">Cumple aniversario este mes y no se liquidó la bonificación.</td></tr>';
+        }).join('')+
+        B.pagadaFuera.map(function(x){
+          return '<tr class="row-bad"><td>'+esc(x.r.cedula)+'</td>'+
+            '<td class="td-nom">'+esc(x.r.nombre)+'</td>'+
+            '<td>'+esc(x.a.ingreso)+'</td>'+
+            '<td class="mn">'+x.a.anios+' años '+x.a.meses+' meses</td>'+
+            '<td class="mn">'+MESES[x.a.mesAniversario]+
+              (x.a.interrumpidos?' <span style="font-size:10px;color:#D97706">(corrido '+x.a.interrumpidos+'d)</span>':'')+'</td>'+
+            '<td class="mn">'+cop(x.r.c['114']||0)+'</td>'+
+            '<td class="td-nota">Se liquidó bonificación en un mes distinto al de su aniversario.</td></tr>';
+        }).join('')+
+        '</tbody></table></div>':
+        '<div class="mini-note" style="color:#0E9F6E">✓ Las bonificaciones liquidadas '+
+        'coinciden con los aniversarios de ingreso.</div>')+
+      (B.sinDato?'<div class="mini-note" style="color:#D97706">'+B.sinDato+
+        ' servidor(es) con bonificación liquidada no tienen fecha de ingreso cargada.</div>':'')
+    :(nP?'<div class="mini-note">Cargue la prenómina para verificar los aniversarios.</div>'
+        :''))+
+  '</div>';
+
+  return panelPlanta+
+    '<div class="section">'+
     '<h2>Novedades de planta · '+esc(perStr)+'</h2>'+
     '<div class="info-box">'+
       '<b>Esta pestaña solo aplica si en el período hubo ingresos o retiros.</b> '+
@@ -5051,7 +6090,167 @@ function verificarEntrega(){
       'SMLMV '+cop(P.smlmv)+' · UVT '+cop(P.uvt)+'.');
   }
 
-  /* ── 10. Respaldo del trabajo ──────────────────────────────────────── */
+  /* ── 10. Bonificación por servicios contra aniversarios ────────────── */
+  var B=verificarBSP();
+  if(!Object.keys(S.planta||{}).length){
+    var conBSP=rows.filter(function(r){return (r.c['114']||0)>0;}).length;
+    if(conBSP) add('ADVIERTE','Aniversarios de planta',
+      conBSP+' servidor(es) recibieron bonificación por servicios, pero sin la fecha '+
+      'de ingreso no puede verificarse que corresponda a su aniversario (Decreto 1042 '+
+      'de 1978, artículo 45).',
+      'Cargue la caracterización de planta.','novedades','planta');
+    else add('OK','Aniversarios de planta','Ningún servidor recibió bonificación este mes.');
+  } else if(B&&(B.sinPagar.length||B.pagadaFuera.length)){
+    add('ADVIERTE','Aniversarios de planta',
+      (B.sinPagar.length?B.sinPagar.length+' servidor(es) cumplen aniversario y no se les '+
+        'liquidó la bonificación. ':'')+
+      (B.pagadaFuera.length?B.pagadaFuera.length+' recibieron bonificación en un mes '+
+        'distinto al de su aniversario.':''),
+      'Revise los casos y contraste con los actos de nombramiento.','novedades','planta');
+  } else {
+    add('OK','Aniversarios de planta',
+      B?('Las bonificaciones coinciden con los aniversarios de ingreso.')
+       :'Caracterización de planta cargada.');
+  }
+
+  /* ── 10-bis. Asignación básica contra la caracterización de planta ──── */
+  var nPl=Object.keys(S.planta||{}).length;
+  if(nPl){
+    var difSal=[], difGR=[], fueraPl=[], difTot=0, grTot=0, regMal=[];
+    S.computed.rows.forEach(function(r){
+      var pt=S.planta[String(r.cedula)];
+      if(!pt){ fueraPl.push(r); return; }
+      /* El regimen que trae la planta debe coincidir con el de la nomina que
+         se esta revisando: el trabajador oficial se rige por convencion y por
+         contrato de trabajo, el empleado publico por acto administrativo, y la
+         liquidacion prestacional no es la misma. */
+      if(pt.regimen && pt.regimen!==S.regimen) regMal.push({r:r, p:pt});
+      /* Tolerancia de un salario mínimo diario: la planta registra la
+         asignación mensual y la prenómina liquida por días. */
+      var tol=Math.round(P.smlmv/30);
+      if(pt.sueldo){
+        var bas=r.salariaBasico||r.c['101']||0;
+        if(bas>0 && Math.abs(bas-pt.sueldo)>tol){
+          difSal.push({r:r, cpt:'101 asignación básica',
+            planta:pt.sueldo, nomina:bas, dif:bas-pt.sueldo});
+          difTot+=Math.abs(bas-pt.sueldo);
+        }
+      }
+      /* Gastos de representación: concepto 102. Es factor de salario
+         (Decreto 1042 de 1978, artículo 42), entra al IBC y a la base
+         prestacional, pero NO a la base de retención. */
+      var gr=r.c['102']||0;
+      if(pt.gastosRep || gr){
+        if(Math.abs(gr-(pt.gastosRep||0))>tol){
+          difGR.push({r:r, planta:pt.gastosRep||0, nomina:gr,
+            dif:gr-(pt.gastosRep||0)});
+          grTot+=Math.abs(gr-(pt.gastosRep||0));
+        }
+      }
+    });
+    if(regMal.length){
+      add('BLOQUEA','Régimen del servidor',
+        regMal.length+' servidor(es) de esta nómina figuran en la caracterización con '+
+        'un régimen distinto al que se está revisando: '+
+        regMal.slice(0,5).map(function(k){
+          return k.r.nombre+' ('+(k.p.vinculacion||k.p.regimen)+')';
+        }).join('; ')+(regMal.length>5?' y '+(regMal.length-5)+' más':'')+'. '+
+        'El trabajador oficial se vincula por contrato de trabajo y se rige por la '+
+        'convención colectiva; el empleado público, por acto administrativo. La '+
+        'liquidación prestacional y los factores salariales no son los mismos, de modo '+
+        'que revisarlo con el régimen equivocado invalida el resultado.',
+        'Confirme con la DTH el acto de vinculación de cada caso y cargue la nómina en '+
+        'la pestaña del régimen que corresponda.',
+        'planta');
+    }
+    if(difSal.length){
+      add('ADVIERTE','Asignación básica vs. planta',
+        difSal.length+' servidor(es) con asignación básica distinta a la registrada '+
+        'en la caracterización de planta, por '+cop(difTot)+' en valor absoluto. '+
+        'Puede ser un ascenso o un encargo no actualizado en el libro de la DTH, o '+
+        'un error de liquidación: en ambos casos hay que aclararlo antes de firmar.',
+        'Contraste los casos contra el acto administrativo de nombramiento o de '+
+        'encargo y pida a la DTH actualizar la caracterización si procede.',
+        'empleados');
+    } else {
+      add('OK','Asignación básica vs. planta',
+        'La asignación básica de la prenómina coincide con la caracterización de '+
+        'planta en todos los servidores con sueldo registrado.');
+    }
+    if(difGR.length){
+      add('ADVIERTE','Gastos de representación vs. planta',
+        difGR.length+' servidor(es) con diferencia entre el concepto 102 de la '+
+        'prenómina y los gastos de representación de la planta, por '+cop(grTot)+
+        ' en valor absoluto: '+difGR.slice(0,4).map(function(k){
+          return k.r.nombre+' (nómina '+cop(k.nomina)+' · planta '+cop(k.planta)+')';
+        }).join('; ')+(difGR.length>4?' y '+(difGR.length-4)+' más':'')+'. '+
+        'Los gastos de representación son factor de salario (Decreto 1042 de 1978, '+
+        'artículo 42): entran al IBC y a la base prestacional, pero quedan fuera de '+
+        'la base de retención, que es lo que excluye el Prototipo 102. Una diferencia '+
+        'aquí arrastra el IBC, las prestaciones y la retención a la vez.',
+        'Contraste contra el decreto que fija la remuneración del cargo y verifique '+
+        'que el concepto 102 esté dentro del Prototipo 101 y fuera del 102.',
+        'empleados');
+    }
+    if(fueraPl.length){
+      /* Un servidor puede faltar en la planta activa porque se desvinculo en
+         el mes: la hoja de personal desvinculado lo explica, y entonces no es
+         una inconsistencia sino una novedad de retiro que hay que mirar. */
+      var rIdx={}; (S.plantaRetiros||[]).forEach(function(x){ rIdx[String(x.cedula)]=x; });
+      var desv=[], sinRastro=[];
+      fueraPl.forEach(function(r){
+        var x=rIdx[String(r.cedula)];
+        if(x) desv.push({r:r, d:x}); else sinRastro.push(r);
+      });
+      if(desv.length){
+        add('ADVIERTE','Retiros en el período',
+          desv.length+' servidor(es) de la prenómina figuran como desvinculados en la '+
+          'caracterización: '+desv.slice(0,4).map(function(k){
+            return k.r.nombre+(k.d.retiro?' (retiro '+fmtFecha(k.d.retiro)+
+              (k.d.novedad?', '+k.d.novedad:'')+')':' (sin fecha de retiro)');
+          }).join('; ')+
+          (desv.length>4?' y '+(desv.length-4)+' más':'')+'. '+
+          'En un retiro de mitad de mes la cotización va por días, la liquidación '+
+          'definitiva de prestaciones entra en la nómina y el reporte de la novedad '+
+          'de retiro en PILA debe coincidir con la fecha del acto administrativo.',
+          'Verifique los días cotizados, la liquidación definitiva y que la fecha de '+
+          'retiro de la planilla coincida con la del acto administrativo.',
+          'pila');
+      }
+      if(sinRastro.length){
+        add('ADVIERTE','Cobertura de la planta',
+          sinRastro.length+' servidor(es) de la prenómina no aparecen en la '+
+          'caracterización de planta ni entre los desvinculados: '+
+          sinRastro.slice(0,5).map(function(r){return r.nombre;}).join(', ')+
+          (sinRastro.length>5?' y '+(sinRastro.length-5)+' más':'')+'. '+
+          'Sin fecha de ingreso no puede verificarse en ellos la bonificación por '+
+          'servicios prestados ni la causación de vacaciones.',
+          'Pida a la DTH la caracterización actualizada a la fecha de corte de la '+
+          'nómina, o cargue la versión más reciente.',
+          'planta');
+      }
+    }
+  }
+
+  /* ── 11. Clase de riesgo para ARL ──────────────────────────────────── */
+  var A=resumenARL();
+  if(A&&A.sinClase){
+    add('ADVIERTE','Clase de riesgo ARL',
+      A.sinClase+' de '+N+' servidor(es) sin clase de riesgo: se les aplicó el '+
+      'parámetro general de '+pct(P.arl)+'. La tarifa se fija por centro de trabajo '+
+      '(Decreto 1072 de 2015, artículo 2.2.4.3.5), de modo que el aporte calculado '+
+      'para ellos no es confiable. Con tarifa única el ARL total daría '+
+      cop(A.base*P.arl)+' contra '+cop(A.aporte)+' con las clases asignadas.',
+      'Cargue la planilla PILA del período —trae la tarifa de cada afiliado— o '+
+      'diligencie la columna de clase de riesgo en la caracterización de planta.',
+      'pila');
+  } else if(A){
+    add('OK','Clase de riesgo ARL',
+      'Los '+N+' servidores tienen tarifa de riesgos laborales identificada ('+
+      A.lista.length+' clase(s) distinta(s) en la planta).');
+  }
+
+  /* ── 12. Respaldo del trabajo ──────────────────────────────────────── */
   if(S.guardado.estado==='sin-almacenamiento'){
     add('ADVIERTE','Respaldo',
       'El navegador no permite guardar automáticamente. Si cierra la pestaña pierde el trabajo.',
@@ -5088,19 +6287,23 @@ function vVerificacion(){
       kpi(r.advierte,'Advertencias',r.advierte?'amber':'green','')+
       kpi(r.ok,'Controles superados','green','')+
     '</div>'+
-    '<div class="tbl-wrap"><table class="tbl">'+
-    '<thead><tr><th style="width:34px"></th><th>Control</th><th>Estado</th>'+
-    '<th>Qué hacer</th><th style="width:110px"></th></tr></thead><tbody>'+
+    /* Tabla propia, con reparto fijo de columnas: la tabla general usa anchos
+       mínimos que aquí forzaban desplazamiento horizontal y dejaban el botón
+       de corrección fuera de la vista, con el texto montado encima. */
+    '<table class="tbl tbl-verif">'+
+    '<thead><tr><th class="c-ico"></th><th class="c-ctrl">Control</th>'+
+    '<th class="c-det">Estado</th><th class="c-acc">Qué hacer</th>'+
+    '<th class="c-btn"></th></tr></thead><tbody>'+
     v.map(function(x){
       var corregible=(x.nivel!=='OK'&&x.ir);
       return '<tr'+(x.nivel==='BLOQUEA'?' class="row-bad"':'')+'>'+
-        '<td style="text-align:center;color:'+COL[x.nivel]+';font-weight:800">'+ICO[x.nivel]+'</td>'+
-        '<td style="font-weight:600;white-space:nowrap">'+esc(x.control)+'</td>'+
-        '<td class="td-nota">'+esc(x.detalle)+'</td>'+
-        '<td class="td-nota" style="color:'+COL[x.nivel]+'">'+esc(x.accion)+'</td>'+
-        '<td>'+(corregible?
+        '<td class="c-ico" style="color:'+COL[x.nivel]+'">'+ICO[x.nivel]+'</td>'+
+        '<td class="c-ctrl">'+esc(x.control)+'</td>'+
+        '<td class="c-det">'+esc(x.detalle)+'</td>'+
+        '<td class="c-acc" style="color:'+COL[x.nivel]+'">'+esc(x.accion)+'</td>'+
+        '<td class="c-btn">'+(corregible?
           '<button class="btn-ir" data-ir="'+esc(x.ir)+'" data-foco="'+esc(x.foco||'')+'">'+
-          'Corregir →</button>':'')+'</td>'+
+          'Corregir</button>':'')+'</td>'+
       '</tr>';
     }).join('')+
     '</tbody></table></div>'+
@@ -5131,7 +6334,10 @@ function vInforme(){
   var nivTxt=pond>=90?'EXCELENTE':pond>=75?'SATISFACTORIO':pond>=60?'ACEPTABLE':'DEFICIENTE';
   var nivCol=pond>=90?'#059669':pond>=75?'#2563A8':pond>=60?'#D97706':'#DC2626';
 
-  var h='<div class="section">'+
+  /* El panel de verificación encabeza la vista: debe leerse antes de
+     tocar los hallazgos o generar los documentos. */
+  var h=vVerificacion()+
+    '<div class="section">'+
     '<h2>Elaborar informe de auditoría · '+esc(perStr)+'</h2>'+
     '<div class="info-box">Los hallazgos y calificaciones se generaron automáticamente a partir de los datos de la nómina cargada. '+
     'Revíselos, ajústelos si es necesario, y presione <b>Elaborar informe</b> para generar el Word y el Excel de calificación.</div>'+
@@ -5184,8 +6390,7 @@ function vInforme(){
     '<th style="width:80px">Ponderado</th><th>Criterio</th></tr></thead><tbody>'+
     I.califs.map(function(m,i){
       var nc=m.n>=90?'#059669':m.n>=75?'#2563A8':m.n>=60?'#D97706':'#DC2626';
-      return vVerificacion()+
-    '<tr>'+
+      return '<tr>'+
         '<td><b>'+esc(m.m)+'</b></td>'+
         '<td style="text-align:center">'+(m.p*100).toFixed(0)+'%</td>'+
         '<td><input class="nota-in" data-i="'+i+'" type="number" min="0" max="100" value="'+m.n+'" style="color:'+nc+'"></td>'+
@@ -5251,7 +6456,8 @@ function vParams(){
       '<input id="'+id+'" type="number" step="any" value="'+val+'" class="pi">'+
     '</div>';
   }
-  return '<div class="section">'+
+  return vVerificacion()+
+    '<div class="section">'+
     '<h2>Parámetros normativos 2026</h2>'+
     '<p class="info-box">Editables para ajustar a futuras resoluciones. Afectan todos los cálculos.</p>'+
     '<div class="pf-grid">'+
@@ -5262,12 +6468,26 @@ function vParams(){
     pf('p-n790','N divisor 790 UVT',P.n790,'12=normativo; 1=KACTUS')+
     pf('p-saludT','Salud trabajador %',P.saludT*100,'Ley 100/1993')+
     pf('p-penT','Pensión trabajador %',P.penT*100,'Ley 100/1993')+
-    pf('p-arl','ARL Clase V %',P.arl*100,'Dec. 1607/2002')+
+    pf('p-arl','ARL por defecto %',P.arl*100,'solo si falta la clase')+
     pf('p-bspBase','BSP base (Dec.0320)',P.bspBase,'Dec. 0320/2026')+
     pf('p-bspT1','BSP tarifa ≤ base %',P.bspT1*100,'Dec. 0320/2026')+
     pf('p-bspT2','BSP tarifa > base %',P.bspT2*100,'Dec. 0320/2026')+
     '</div>'+
     '<button id="btn-ap" class="btn-exp" style="margin-top:12px">Aplicar y recalcular</button>'+
+    '<h3 style="margin-top:22px">Tarifas por clase de riesgo</h3>'+
+    '<div class="info-box">'+
+      'Tarifas del artículo 2.2.4.3.5 del Decreto 1072 de 2015 (antes artículo 13 del '+
+      'Decreto 1772 de 1994). La tarifa real de cada servidor la define el centro de '+
+      'trabajo al que está adscrito, no la entidad: la aplicación la toma de la '+
+      'planilla PILA y, en su defecto, de la caracterización de planta. El parámetro '+
+      'de arriba solo se usa cuando ninguna de las dos fuentes la trae.'+
+    '</div>'+
+    '<div class="tbl-wrap"><table class="tbl" style="max-width:520px">'+
+      '<thead><tr><th>Clase</th><th>Mínima</th><th>Inicial</th><th>Máxima</th></tr></thead>'+
+      '<tbody>'+CLASES_ARL.map(function(k){
+        return '<tr><td>Clase '+k.clase+'</td><td class="mn">'+pct(k.min)+'</td>'+
+          '<td class="mn"><b>'+pct(k.tasa)+'</b></td><td class="mn">'+pct(k.max)+'</td></tr>';
+      }).join('')+'</tbody></table></div>'+
   '</div>'+
   (S.debugLines?
     '<div class="section">'+
@@ -5453,6 +6673,49 @@ function wire(){
       render();
     };
   });
+
+  /* ---- Caracterización de planta ---- */
+  var ip2=qs('inp-planta');
+  if(ip2) ip2.onchange=function(){
+    var f=this.files[0]; if(!f) return;
+    var rd=new FileReader(), nm=f.name||'';
+    if(/\.(xlsx|xlsm|xls)$/i.test(nm)){
+      rd.onload=function(ev){ loadPlantaXlsx(ev.target.result,nm); };
+      rd.readAsArrayBuffer(f);
+    } else {
+      rd.onload=function(ev){ loadPlanta(ev.target.result,nm); };
+      rd.readAsText(f,'UTF-8');
+    }
+  };
+  var pc2=qs('planta-clr');
+  if(pc2) pc2.onclick=function(){
+    if(confirm('¿Quitar la caracterización de planta?')){
+      S.planta={}; S.plantaFuente='';
+      if(S.data) recompute();
+      S.guardado.pendiente=true; guardarEstado(); render();
+    }
+  };
+
+  /* ---- Interrupciones del servicio ---- */
+  var ipr=qs('interr-proc');
+  if(ipr) ipr.onclick=function(){
+    var ta=qs('interr-txt');
+    S.interrTexto=ta?ta.value:'';
+    S.interrupciones=parseInterrupciones(S.interrTexto);
+    if(!S.interrupciones.length&&S.interrTexto.trim())
+      alert('No se reconoció ninguna interrupción. Cada línea debe traer la cédula, '+
+            'el tipo y dos fechas: 4184305 LICENCIA NO REMUNERADA 01/03/2024 15/04/2024');
+    if(S.data) recompute();
+    S.guardado.pendiente=true; guardarEstado(); render();
+  };
+  var icl=qs('interr-clr');
+  if(icl) icl.onclick=function(){
+    if(confirm('¿Limpiar las interrupciones capturadas?')){
+      S.interrupciones=[]; S.interrTexto='';
+      if(S.data) recompute();
+      S.guardado.pendiente=true; guardarEstado(); render();
+    }
+  };
 
   /* ---- Acumulado anual ---- */
   var ia=qs('inp-acum');
@@ -5687,8 +6950,16 @@ body{font-family:'Inter',system-ui,sans-serif;background:#F0EDE8;color:#1C1C1E;f
 .frm-falta{border-color:#DC2626 !important;background:#FEF2F2;
   box-shadow:0 0 0 3px rgba(220,38,38,.12)}
 .hall-wrap{scroll-margin-top:20px}
-.btn-ir{background:#C45B2E;color:#fff;border:none;border-radius:5px;padding:5px 11px;
-  font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+.tbl-verif{table-layout:fixed;width:100%}
+.tbl-verif th,.tbl-verif td{vertical-align:top;text-align:left;padding:9px 10px;
+  white-space:normal;word-break:normal;overflow-wrap:anywhere;line-height:1.45}
+.tbl-verif .c-ico{width:30px;text-align:center;font-weight:800;font-size:13px}
+.tbl-verif .c-ctrl{width:17%;font-weight:600}
+.tbl-verif .c-det{width:40%;font-size:11.5px;color:#5A4D42}
+.tbl-verif .c-acc{width:27%;font-size:11.5px}
+.tbl-verif .c-btn{width:96px;text-align:right}
+.btn-ir{background:#C45B2E;color:#fff;border:none;border-radius:5px;padding:5px 10px;
+  font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;width:100%}
 .btn-ir:hover{background:#D96B3A}
 .btn-mini{background:none;border:1px solid #C8BFAF;color:#5A4D42;border-radius:4px;padding:2px 7px;font-size:10.5px;cursor:pointer;font-family:inherit}
 .btn-mini:hover{border-color:#C45B2E;color:#C45B2E}
@@ -5912,6 +7183,9 @@ try {
     archivarPDF:archivarPDF, archivarLote:archivarLote, instantanea:instantanea,
     verificarEntrega:verificarEntrega, resumenVerificacion:resumenVerificacion,
     loadAcumulado:loadAcumulado, baseAnualDe:baseAnualDe,
+    loadPlanta:loadPlanta, antiguedadDe:antiguedadDe, verificarBSP:verificarBSP,
+    vacacionesCausadas:vacacionesCausadas,
+    parseInterrupciones:parseInterrupciones, diasInterrumpidos:diasInterrumpidos,
     porcentajeFijoP2:porcentajeFijoP2, acumuladoDesdeHistorico:acumuladoDesdeHistorico,
     generarCalifsAuto:generarCalifsAuto,
     validarCuadre:validarCuadre
