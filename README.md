@@ -81,9 +81,112 @@ renglones** —los días anteriores y los posteriores—, y en los días de nove
 liquida ARL al 0,000 %. Esos renglones se consolidan como fracciones del mismo mes y la
 tarifa cero se descarta para efectos de la clase de riesgo.
 
+## Lectura del PDF de KACTUS
+
+El reporte lleva impresa en vertical la marca de agua «Reporte Definición». pdf.js la
+entrega como caracteres sueltos, uno por renglón, en una misma columna, y eso rompía la
+lectura de dos maneras. La leve: la letra quedaba pegada a una palabra —«cFONSECA»,
+«ADMnINISTRATIVO»—. La grave: la letra se dibuja a una altura intermedia entre dos
+renglones, y como el agrupador anclaba el renglón en la posición del primer elemento que
+encontraba, la letra corría el ancla y partía el renglón en dos, además invertido:
+
+```
+"c Salario Básico 3.654.949,00"
+"47437504 FONSECA FONSECA FLOR MIRIAM"
+```
+
+Partido así, el encabezado no se reconocía, todos los conceptos de ese servidor se
+acumulaban sobre el anterior, y el anterior tomaba como propia la línea TOTAL
+IDENTIFICACION del siguiente. En la prenómina de junio de 2026 le pasaba a seis
+servidores.
+
+Ahora los glifos de la marca de agua se descartan **antes** de agrupar —ninguna celda real
+del reporte es una letra sola— y el agrupamiento encadena contra el renglón anterior en
+vez de anclarse en el primero. El interlineado del reporte es de unas catorce unidades y
+los desfases dentro de un renglón no pasan de 1,1, así que no hay riesgo de fundir dos
+renglones. Como red de seguridad queda un reensamblador que vuelve a unir el encabezado si
+aun así llegara partido.
+
+Y para que un fallo de lectura no vuelva a pasar inadvertido, hay un control independiente:
+en el reporte de KACTUS cada servidor cierra con una línea TOTAL IDENTIFICACION, de modo
+que si se reconocen menos encabezados que líneas de total, falta alguno. Ese control
+**bloquea la entrega** y dice cuántos faltan.
+
+## Historial de retención
+
+En la pestaña Retención, la aplicación contrasta la retención de cada servidor contra la
+de un mes archivado y **atribuye la diferencia a los conceptos que cambiaron**. Esa es la
+parte que importa: saber que una retención subió no sirve de nada si no se sabe por qué.
+
+Cada caso sale clasificado:
+
+- **Variación explicada** — la base del Prototipo 102 se movió y los conceptos que
+  cambiaron lo justifican. Entró una bonificación por servicios, una prima, una
+  indemnización de vacaciones. El desglose dice cuál, cuánto antes, cuánto ahora.
+- **Retención sin base** — la retención varió y la base no. Si el servidor cambió de
+  procedimiento, la aplicación lo dice; si no, hay que mirar el porcentaje fijo del
+  Procedimiento 2, las deducciones del artículo 387 o los aportes obligatorios.
+- **Base sin retención** — la base subió y la retención no se movió. Puede ser un
+  servidor marcado como no declarante, un cambio de procedimiento, o un concepto que
+  quedó fuera del prototipo.
+- **Sin conceptos identificados** — la base varió pero ningún concepto del Prototipo 102
+  lo explica. Hay que mirar los conceptos que restan y la depuración del artículo 388.
+
+También relaciona quiénes entraron a la nómina y quiénes salieron respecto del mes de
+comparación, con lo que retenían.
+
+El historial va al libro de Excel en la hoja **HISTORIAL RETENCIÓN**, y a la relación de
+casos para la técnica —pero ahí solo los que no cuadran: una retención que subió porque
+entró una prima es lo que debía pasar y no es trabajo para nadie.
+
+Requiere que el mes de comparación esté archivado en la pestaña Histórico. Los meses
+archivados con versiones anteriores de la aplicación no guardaban el detalle de retención
+por servidor; si selecciona uno de esos, la aplicación lo dice y basta con volver a
+archivar ese PDF.
+
+## Por qué este mes sí se retuvo
+
+La retención del Procedimiento 1 se liquida sobre el ingreso **del mes**, no sobre la
+asignación básica. La tabla del artículo 383 del Estatuto Tributario empieza a cobrar por
+encima de **95 UVT de base gravable** y por debajo de ese punto la tarifa es cero. De ahí
+que a un servidor que nunca había tenido retención se le retenga el mes en que le entran
+una bonificación, una prima o unas vacaciones: esos pagos suman a la base del mes y la
+empujan sobre el umbral.
+
+Para cualquier servidor con retención, la aplicación reconstruye la cadena completa: los
+conceptos del mes que suman al Prototipo 102 uno por uno, los aportes obligatorios que
+restan, la renta exenta del 25 % con su tope de 790 UVT anuales, la base gravable en pesos
+**y en UVT**, el umbral de 95 UVT, el tramo que aplica y la retención aproximada al mil del
+artículo 577.
+
+Además calcula qué habría pasado sin los pagos adicionales del mes. Un servidor con
+asignación de $4.271.774 queda en 56,28 UVT —sin retención—; con una bonificación por
+servicios de $2.600.000 y una prima de $900.000 la base llega a 106,40 UVT y entra al tramo
+del 19 %.
+
+De ahí sale una **sustentación técnica en Word**. Se genera desde el selector que está al
+comienzo del panel, con la lista de todos los servidores con retención del período: **no
+hace falta tener un mes archivado**, porque la depuración se arma con el mes que esté
+cargado. Si además hay un mes de comparación, la sustentación trae el contraste —cuánto fue
+la base ese mes y por qué no hubo retención— y la aplicación lista aparte a quienes pasaron
+de no tener retención a tenerla, cada uno con su propio botón.
+
+El documento va dirigido a la Dirección de Talento Humano. No es una constancia al
+servidor: quien revisa la nómina deja la observación, el técnico corrige o aclara en
+KACTUS, y responderle al servidor —si llega a consultar— le corresponde a la Dirección. Por
+eso habla del servidor en tercera persona y se firma como proyectado, no como certificado.
+
+Trae la cadena paso a paso, el fundamento normativo, el efecto en los períodos siguientes
+y la observación concreta. Si la nómina del período no liquidó esa retención, lo dice en un
+aviso arriba y la observación pasa a ser que debe liquidarse antes de cerrar.
+
+Los mismos casos entran a la relación para la técnica como numeral propio, con la
+depuración resumida y su columna de respuesta, de modo que el soporte quede en el mismo
+documento que ella devuelve.
+
 ## Verificación previa a la entrega
 
-Antes de generar cualquier documento la aplicación corre diecisiete controles. Los que
+Antes de generar cualquier documento la aplicación corre una veintena de controles. Los que
 detectan cifras incorrectas **bloquean la entrega**; los demás advierten y quedan como
 limitaciones del alcance.
 
@@ -97,11 +200,17 @@ problema, activa el filtro que aísla los casos y resalta los campos pendientes.
 
 ## Entregables
 
-**Libro de auditoría en Excel** — trece hojas con fórmulas vivas: al cambiar el SMLMV o
-la UVT en PARÁMETROS, el libro entero se recalcula. Incluye una guía metodológica paso
-a paso, el mapa completo de conceptos clasificados por naturaleza, la trazabilidad
-mensual, la tabla de clases de riesgo de ARL y columnas de contraste que muestran cada
-base calculada por prototipo y por el criterio anterior, con su diferencia.
+**Libro de auditoría en Excel** — once hojas fijas y hasta cinco más según lo que se haya
+cargado, todas con fórmulas vivas: al cambiar el SMLMV o la UVT en PARÁMETROS, el libro
+entero se recalcula. Incluye una guía metodológica paso a paso, el mapa completo de
+conceptos clasificados por naturaleza, la trazabilidad mensual, la tabla de clases de
+riesgo de ARL y columnas de contraste que muestran cada base calculada por prototipo y por
+el criterio anterior, con su diferencia.
+
+Las hojas que dependen de lo cargado son **CRUCE ESPEJO PILA** y **CONCILIACIÓN PILA**
+—requieren la planilla del operador—, **ASIGNACIÓN vs PLANTA** —requiere la
+caracterización—, **HISTORIAL RETENCIÓN** —requiere un mes archivado— y **NOVEDADES**, que
+solo aparece si las hubo en el período.
 
 La hoja **CRUCE ESPEJO PILA** trae una fila por servidor con el IBC y los aportes que
 exige la norma frente a los que liquidó el operador, tomados del archivo cargado, y la
@@ -110,8 +219,23 @@ con el IBC, la salud y la pensión; la columna de ARL se deja a la vista aparte,
 los días de novedad el operador liquida al 0,000 % y esa diferencia es un hecho por
 sustentar, no un error de cálculo.
 
+La hoja **HISTORIAL RETENCIÓN** relaciona a cada servidor cuya retención varió frente al
+mes archivado, con los conceptos que cambiaron escritos en una columna —para poder
+filtrarlos— y la situación en que quedó cada caso.
+
 **Informe de auditoría en Word** — hallazgos, recomendaciones y calificación bajo
-metodología MECI.
+metodología MECI. Va dirigido a la Dirección.
+
+**Relación de casos para la técnica, en Word** — el mismo período visto desde el otro lado:
+los casos por aclarar agrupados por tema, cada uno con la norma que lo sustenta y qué
+revisar en KACTUS. No califica ni dictamina; es un documento de trabajo. Cada tabla lleva
+una columna en blanco para que quien liquida anote si corrigió, si el caso no procede o qué
+explica la diferencia, y el documento se devuelve diligenciado. Relaciona también lo que
+quedó conforme, para no repetir revisión sobre lo que ya está bien.
+
+**Sustentación técnica de retención, en Word** — el soporte de un caso puntual, con la
+depuración paso a paso hasta el cruce del umbral de las 95 UVT. Se genera por servidor
+desde la pestaña Retención.
 
 **Acta Resumen FO-GD-11** — réplica del formato institucional, con el encabezado del
 escudo repetido en todas las páginas.

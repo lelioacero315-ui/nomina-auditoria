@@ -264,6 +264,72 @@ function arlNovedadSinCotizar(){
   return {casos:casos, dias:dias, norma:norma, pagado:pagado, dif:norma-pagado};
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * CONTRASTE DE LA ASIGNACION BASICA CONTRA LA CARACTERIZACION DE PLANTA
+ *
+ * Compara, servidor por servidor, lo que la prenomina liquido como
+ * asignacion basica (concepto 101, o el "Salario Básico" del encabezado)
+ * contra el sueldo registrado en la planta, y lo mismo con los gastos de
+ * representacion (concepto 102).
+ *
+ * Dos cuidados:
+ *  - Si el servidor no trabajo el mes completo, el concepto 101 sale
+ *    prorrateado. En ese caso se lleva a mes completo antes de comparar; el
+ *    encabezado "Salario Básico", cuando esta, ya viene mensual y se prefiere.
+ *  - La tolerancia es un salario minimo diario, para no marcar como
+ *    diferencia el redondeo de una liquidacion por dias.
+ * ─────────────────────────────────────────────────────────────────────── */
+function contrasteAsignacion(){
+  if(!S.computed) return null;
+  var P=S.P, tol=Math.round(P.smlmv/30);
+  var nPl=Object.keys(S.planta||{}).length;
+  if(!nPl) return null;
+  var rIdx={}; (S.plantaRetiros||[]).forEach(function(x){ rIdx[String(x.cedula)]=x; });
+  var filas=[], sinPlanta=0, sinSueldo=0, conformes=0;
+  S.computed.rows.forEach(function(r){
+    var pt=S.planta[String(r.cedula)];
+    if(!pt){ sinPlanta++; return; }
+    var dias=(r.q&&r.q['101'])||0;
+    /* Asignación básica mensual equivalente */
+    /* La fila calculada guarda el valor del encabezado en salBasico */
+    var mensual=r.salBasico||0, fuente='Encabezado del bloque';
+    if(!mensual){
+      var c101=r.c['101']||0;
+      if(dias>0&&dias<30){ mensual=Math.round(c101*30/dias); fuente='Concepto 101 llevado a 30 días'; }
+      else { mensual=c101; fuente='Concepto 101'; }
+    }
+    var gr=r.c['102']||0, grP=pt.gastosRep||0;
+    var d1=(pt.sueldo?mensual-pt.sueldo:0);
+    var d2=gr-grP;
+    var mal1=(pt.sueldo&&mensual>0&&Math.abs(d1)>tol);
+    var mal2=((grP||gr)&&Math.abs(d2)>tol);
+    if(!pt.sueldo) sinSueldo++;
+    if(!mal1&&!mal2){ conformes++; return; }
+    filas.push({
+      cedula:r.cedula, nombre:r.nombre,
+      cargo:pt.cargo||r.cargo||'', grado:pt.grado||'',
+      vinculacion:pt.vinculacion||'', ingreso:pt.ingreso,
+      dias:dias, nov:r.nov||'NORMAL', fuente:fuente,
+      nomina:mensual, planta:pt.sueldo||0, dif:d1,
+      pct:(pt.sueldo?(mensual/pt.sueldo-1)*100:0),
+      gr:gr, grPlanta:grP, difGR:d2,
+      c101:r.c['101']||0,
+      retirado:!!rIdx[String(r.cedula)],
+      difAsig:mal1, difGR_:mal2
+    });
+  });
+  filas.sort(function(a,b){ return Math.abs(b.dif)-Math.abs(a.dif); });
+  var sube=filas.filter(function(f){return f.dif>0;});
+  var baja=filas.filter(function(f){return f.dif<0;});
+  return {filas:filas, conformes:conformes, sinPlanta:sinPlanta, sinSueldo:sinSueldo,
+    tol:tol,
+    totalAbs:filas.reduce(function(a,f){return a+Math.abs(f.dif);},0),
+    neto:filas.reduce(function(a,f){return a+f.dif;},0),
+    sube:sube.length, baja:baja.length,
+    montoSube:sube.reduce(function(a,f){return a+f.dif;},0),
+    montoBaja:baja.reduce(function(a,f){return a+f.dif;},0)};
+}
+
 /* Resumen por clase de riesgo, para la vista, el Excel y los informes */
 function resumenARL(){
   if(!S.computed) return null;
@@ -322,6 +388,7 @@ function nuevoWS(){
     ibcAnt:{}, ibcMesLabel:'', fileName:'', novedades:[], novedadesTexto:'',
     pilaDet:[], pilaArchivo:'', historico:{}, acumAnual:{}, acumFuente:'',
     planta:{}, plantaFuente:'', plantaRetiros:[], plantaArchivo:'', plantaDiag:null,
+    pilaPeriodo:null,
     interrupciones:[], interrTexto:'',
     pilaRep:{salud:'',pension:'',arl:'',ccf:'',sena:'',icbf:'',esap:'',men:''},
     informe:{inicializado:false, elaboro:'',
@@ -350,6 +417,7 @@ var S={
   pilaDet:[], pilaMap:null, pilaHdr:-1, pilaMatriz:null, pilaArchivo:'',
   pilaDebug:null, pilaAviso:'',
   historico:{}, histComp:'', destinoPDF:null, avisoHist:'', histLote:null,
+  histRetMes:'',
   acumAnual:{}, acumFuente:'', planta:{}, plantaFuente:'',
   plantaRetiros:[], plantaArchivo:'', plantaDiag:null,
   interrupciones:[], interrTexto:'',
@@ -921,13 +989,38 @@ function instantanea(){
   if(!S.computed||!S.data) return null;
   var clave=clavePeriodo(S.computed.periodo);
   if(!clave) return null;
-  var ibc={}, nov={}, baseRet={};
+  var ibc={}, nov={}, baseRet={}, ret={};
   S.computed.rows.forEach(function(r){
     ibc[String(r.cedula)]={i:Math.round(r.norma.ibcSS), p:Math.round(r.norma.ibcParaf),
       n:r.nombre, v:r.nov};
     nov[String(r.cedula)]=r.nov;
     /* Base gravable depurada del mes: alimenta el acumulado anual del Proc. 2 */
     baseRet[String(r.cedula)]=Math.round((r.norma.dep&&r.norma.dep.bg)||0);
+    /* Detalle de retención. Se guardan los conceptos que forman la base del
+       Prototipo 102 —solo los que el servidor efectivamente devengó— para
+       poder explicar después a qué se debió una variación entre meses. Sin
+       los conceptos, el historial diría que la retención subió, pero no por
+       qué, que es justamente lo que hay que revisar. */
+    var d=r.norma.dep||{};
+    var cpt={};
+    Object.keys(r.c||{}).forEach(function(k){
+      if(P102.has(k)&&r.c[k]) cpt[k]=Math.round(r.c[k]);
+    });
+    ret[String(r.cedula)]={
+      n:r.nombre,
+      r:Math.round(r.retRep||0),          /* retenido por KACTUS (513) */
+      m:Math.round((r.norma&&r.norma.rP1)||0),  /* retención normativa */
+      b:Math.round(r.norma.baseRet||0),   /* base Prototipo 102 */
+      g:Math.round(d.bg||0),              /* base gravable depurada */
+      a:Math.round(d.aportes||0),         /* aportes obligatorios */
+      e:Math.round(d.re||0),              /* renta exenta */
+      t:Math.round(r.totDev||0),          /* devengado del mes */
+      /* El procedimiento se reconoce por el diagnóstico: el campo CANTIDAD del
+         concepto 513 es lo que KACTUS usa para marcar el Procedimiento 2. */
+      p:(r.diag&&/P2/.test(r.diag.cod))?'2':'1',
+      v:r.nov,
+      c:cpt
+    };
   });
   var C=S.computed;
   return {
@@ -939,7 +1032,7 @@ function instantanea(){
     ssOk:C.ss.ok, ssMenos:C.ss.menos, ssMas:C.ss.mas,
     retOk:C.ret.p1+C.ret.p2, retRev:C.ret.rev, retImpacto:C.ret.impacto||0,
     novNormal:C.cnts.NORMAL||0, novVac:C.cnts.VACACIONES||0, novInc:C.cnts.INCAPACIDAD||0,
-    ibc:ibc, baseRet:baseRet
+    ibc:ibc, baseRet:baseRet, ret:ret
   };
 }
 
@@ -967,25 +1060,7 @@ function archivarPDF(buf,nombre,regimen,cb){
       tareas.push(pdf.getPage(i).then(function(pg){return pg.getTextContent();}));
     return Promise.all(tareas);
   }).then(function(pages){
-    var lineas=[], Y_TOL=2.5;
-    pages.forEach(function(tc){
-      var items=tc.items.map(function(it){return {y:it.transform[5],x:it.transform[4],s:it.str};})
-        .filter(function(it){return it.s&&it.s.trim();})
-        .sort(function(a,b){return b.y-a.y;});
-      var g=[],yr=null;
-      function cerrar(){
-        if(!g.length) return;
-        var ln=g.sort(function(a,b){return a.x-b.x;}).map(function(v){return v.s;})
-          .join(' ').replace(/\s+/g,' ').trim();
-        if(ln) lineas.push(ln);
-        g=[];
-      }
-      items.forEach(function(it){
-        if(yr===null||Math.abs(it.y-yr)<=Y_TOL){ if(yr===null) yr=it.y; g.push(it); }
-        else { cerrar(); yr=it.y; g.push(it); }
-      });
-      cerrar();
-    });
+    var lineas=lineasDePaginas(pages);
 
     var r=parseLines(lineas);
     if(!r.employees.length){ cb({archivo:nombre,ok:false,msg:'No se reconocieron servidores'}); return; }
@@ -1070,6 +1145,253 @@ function aplicarIBCHistorico(){
   S.ibcAnt=r.mapa;
   S.ibcMesLabel=r.etiqueta+' (histórico)';
   return true;
+}
+
+/* =========================================================================
+ * HISTORIAL DE RETENCION
+ *
+ * Contrasta la retencion del periodo activo contra la de un mes archivado y,
+ * cuando hay variacion, la atribuye a los conceptos que cambiaron.
+ *
+ * La pregunta que responde no es "cuanto cambio" sino "por que". Una
+ * retencion que sube porque entro una bonificacion o una prima es normal; la
+ * que sube sin que la base se mueva no lo es, y al reves tampoco: si la base
+ * subio y la retencion quedo igual, hay algo que revisar. Por eso cada caso
+ * sale clasificado y con el desglose de conceptos al lado.
+ *
+ * Solo funciona con meses archivados despues de que se agrego el detalle de
+ * retencion a la instantanea: los archivados antes no lo traen, y en ese caso
+ * la funcion lo dice en vez de inventar un resultado.
+ * ======================================================================= */
+function historialRetencion(clave){
+  if(!S.computed) return null;
+  var h=S.historico&&S.historico[clave];
+  if(!h) return {sinMes:true, clave:clave};
+  if(!h.ret) return {sinDetalle:true, clave:clave, etiqueta:h.etiqueta};
+
+  var TOL=1000;                 /* por debajo de esto es redondeo */
+  var filas=[], nuevos=[], salieron=[], vistos={}, sinCambio=0;
+
+  S.computed.rows.forEach(function(r){
+    var c=String(r.cedula), a=h.ret[c];
+    if(!a){ nuevos.push({cedula:r.cedula, nombre:r.nombre,
+      ret:Math.round(r.retRep||0), base:Math.round(r.norma.baseRet||0)}); return; }
+    vistos[c]=true;
+    var d=r.norma.dep||{};
+    var act={r:Math.round(r.retRep||0), b:Math.round(r.norma.baseRet||0),
+             g:Math.round(d.bg||0), t:Math.round(r.totDev||0),
+             p:(r.diag&&/P2/.test(r.diag.cod))?'2':'1',
+             v:r.nov};
+    var dRet=act.r-a.r, dBase=act.b-a.b, dGrav=act.g-a.g, dDev=act.t-a.t;
+    if(Math.abs(dRet)<=TOL&&Math.abs(dBase)<=TOL){ sinCambio++; return; }
+
+    /* Conceptos que cambiaron, de mayor a menor */
+    var cods={}, cptAct={};
+    Object.keys(r.c||{}).forEach(function(k){
+      if(P102.has(k)&&r.c[k]){ cptAct[k]=Math.round(r.c[k]); cods[k]=1; }
+    });
+    Object.keys(a.c||{}).forEach(function(k){ cods[k]=1; });
+    var mov=[];
+    Object.keys(cods).forEach(function(k){
+      var va=(a.c&&a.c[k])||0, vb=cptAct[k]||0, dd=vb-va;
+      if(Math.abs(dd)<=TOL) return;
+      mov.push({cod:k, nom:(MAPA_CONCEPTOS[k]&&MAPA_CONCEPTOS[k].n)||('Concepto '+k),
+        ant:va, act:vb, dif:dd,
+        tipo:(va===0?'nuevo':(vb===0?'dejó de pagarse':'cambió de valor'))});
+    });
+    mov.sort(function(x,y){ return Math.abs(y.dif)-Math.abs(x.dif); });
+    var sumaMov=mov.reduce(function(s2,x){ return s2+x.dif; },0);
+
+    /* Clasificación del caso */
+    var clase, nota;
+    if(Math.abs(dBase)>TOL&&Math.abs(dRet)<=TOL){
+      clase='BASE SIN RETENCIÓN';
+      nota='La base del Prototipo 102 varió '+cop(dBase)+' y la retención no se movió. '+
+        'Revise si el servidor quedó marcado como no declarante, si cambió de '+
+        'procedimiento o si el concepto que entró está fuera del prototipo.';
+    } else if(Math.abs(dBase)<=TOL&&Math.abs(dRet)>TOL){
+      clase='RETENCIÓN SIN BASE';
+      nota='La retención varió '+cop(dRet)+' sin que la base cambiara. '+
+        (a.p&&act.p&&a.p!==act.p
+          ? 'El procedimiento pasó de '+a.p+' a '+act.p+', lo que lo explica.'
+          : 'Revise el porcentaje fijo del Procedimiento 2, las deducciones del '+
+            'artículo 387 y los aportes obligatorios: la base no cambió, de modo que '+
+            'la variación viene de la depuración o de la parametrización.');
+    } else if(mov.length){
+      clase='VARIACIÓN EXPLICADA';
+      nota='La base varió '+cop(dBase)+', y los conceptos que cambiaron suman '+
+        cop(sumaMov)+'.'+
+        (Math.abs(sumaMov-dBase)>TOL
+          ? ' Quedan '+cop(dBase-sumaMov)+' sin atribuir a un concepto del prototipo.'
+          : '');
+    } else {
+      clase='SIN CONCEPTOS IDENTIFICADOS';
+      nota='La base varió '+cop(dBase)+' pero ningún concepto del Prototipo 102 '+
+        'cambió por encima de '+cop(TOL)+'. Revise los conceptos que restan de la base '+
+        'y la depuración del artículo 388.';
+    }
+
+    filas.push({cedula:r.cedula, nombre:r.nombre,
+      retAnt:a.r, retAct:act.r, dRet:dRet,
+      pctRet:a.r?((dRet/a.r)*100):null,
+      baseAnt:a.b, baseAct:act.b, dBase:dBase,
+      gravAnt:a.g, gravAct:act.g, dGrav:dGrav,
+      devAnt:a.t, devAct:act.t, dDev:dDev,
+      procAnt:a.p||'—', procAct:act.p||'—',
+      novAnt:a.v||'—', novAct:act.v||'—',
+      mov:mov, sumaMov:sumaMov, clase:clase, nota:nota});
+  });
+
+  Object.keys(h.ret).forEach(function(c){
+    if(!vistos[c]) salieron.push({cedula:c, nombre:h.ret[c].n, ret:h.ret[c].r});
+  });
+
+  filas.sort(function(a2,b2){ return Math.abs(b2.dRet)-Math.abs(a2.dRet); });
+  var tot={retAnt:0, retAct:0, dRet:0};
+  Object.keys(h.ret).forEach(function(c){ tot.retAnt+=h.ret[c].r; });
+  S.computed.rows.forEach(function(r){ tot.retAct+=Math.round(r.retRep||0); });
+  tot.dRet=tot.retAct-tot.retAnt;
+
+  return {mes:h, etiqueta:h.etiqueta, filas:filas, nuevos:nuevos, salieron:salieron,
+    sinCambio:sinCambio, tol:TOL, tot:tot,
+    alertas:filas.filter(function(f){
+      return f.clase==='BASE SIN RETENCIÓN'||f.clase==='RETENCIÓN SIN BASE'; }).length};
+}
+
+/* =========================================================================
+ * JUSTIFICACION DE LA RETENCION PRACTICADA
+ *
+ * La retencion del Procedimiento 1 se liquida sobre el ingreso del MES, no
+ * sobre el sueldo: la tabla del articulo 383 del Estatuto Tributario empieza
+ * a cobrar por encima de 95 UVT de base gravable, y por debajo de ese punto
+ * la tarifa es cero. De ahi que un servidor que nunca habia tenido retencion
+ * la tenga el mes en que le entran una bonificacion, una prima o unas
+ * vacaciones: esos pagos suman a la base del mes y la empujan sobre el tope.
+ * No es un error de liquidacion ni un cobro nuevo; es como opera la tabla.
+ *
+ * Esta funcion reconstruye la cadena completa —concepto por concepto, resta
+ * por resta— y la deja en terminos de UVT, que es donde se ve el cruce del
+ * umbral. Sirve para dos cosas: verificar el calculo, y poder explicarselo
+ * al servidor que reclama con el soporte en la mano.
+ * ======================================================================= */
+var TRAMOS_383=[
+  {d:0,    h:95,   t:0,    a:0,   txt:'0 a 95 UVT — tarifa 0 %'},
+  {d:95,   h:150,  t:0.19, a:0,   txt:'más de 95 hasta 150 UVT — 19 %'},
+  {d:150,  h:360,  t:0.28, a:10,  txt:'más de 150 hasta 360 UVT — 28 % más 10 UVT'},
+  {d:360,  h:640,  t:0.33, a:69,  txt:'más de 360 hasta 640 UVT — 33 % más 69 UVT'},
+  {d:640,  h:945,  t:0.35, a:162, txt:'más de 640 hasta 945 UVT — 35 % más 162 UVT'},
+  {d:945,  h:2300, t:0.37, a:268, txt:'más de 945 hasta 2.300 UVT — 37 % más 268 UVT'},
+  {d:2300, h:1e9,  t:0.39, a:770, txt:'más de 2.300 UVT — 39 % más 770 UVT'}
+];
+/* Decimales con coma: es como se escribe una cifra en Colombia, y estos
+   documentos los lee el servidor, no un sistema. */
+function dec2(x){ return Number(x||0).toFixed(2).replace('.',','); }
+
+function tramo383(uvtBase){
+  for(var i=0;i<TRAMOS_383.length;i++)
+    if(uvtBase<=TRAMOS_383[i].h) return TRAMOS_383[i];
+  return TRAMOS_383[TRAMOS_383.length-1];
+}
+
+function justificacionRetencion(r,clavePrev){
+  if(!r) return null;
+  var P=S.P, d=r.norma.dep||{};
+  /* Conceptos del mes que suman a la base del Prototipo 102 */
+  var suman=[];
+  Object.keys(r.c||{}).forEach(function(k){
+    if(P102.has(k)&&r.c[k]) suman.push({cod:k,
+      nom:(MAPA_CONCEPTOS[k]&&MAPA_CONCEPTOS[k].n)||('Concepto '+k), val:Math.round(r.c[k])});
+  });
+  suman.sort(function(a,b){ return b.val-a.val; });
+  /* Conceptos que restan: aportes obligatorios, no constitutivos de renta */
+  var restan=[];
+  Object.keys(r.c||{}).forEach(function(k){
+    if(P102_RESTA.has(k)&&r.c[k]) restan.push({cod:k,
+      nom:(MAPA_CONCEPTOS[k]&&MAPA_CONCEPTOS[k].n)||('Concepto '+k), val:Math.round(r.c[k])});
+  });
+  restan.sort(function(a,b){ return b.val-a.val; });
+
+  var uvtBase=P.uvt?(d.bg||0)/P.uvt:0;
+  var T=tramo383(uvtBase);
+  var umbral=95*P.uvt;                       /* piso de la tabla, en pesos */
+
+  /* Qué habría pasado sin los pagos extraordinarios del mes: se quita todo
+     lo que no es asignación básica ni gastos de representación. */
+  var ordinario=(r.c['101']||0)+(r.c['102']||0);
+  var extra=suman.filter(function(x){ return x.cod!=='101'&&x.cod!=='102'; });
+  var sumaExtra=extra.reduce(function(a,x){ return a+x.val; },0);
+  var baseSinExtra=Math.max(0,ordinario-(d.aportes||0));
+  var bgSinExtra=Math.max(0,baseSinExtra*(1-P.pctRE));
+  var retSinExtra=retP1(bgSinExtra,P.uvt);
+
+  /* Mes de comparación, si está archivado con detalle */
+  var prev=null;
+  if(clavePrev&&S.historico&&S.historico[clavePrev]&&S.historico[clavePrev].ret){
+    var a=S.historico[clavePrev].ret[String(r.cedula)];
+    if(a) prev={etiqueta:S.historico[clavePrev].etiqueta, ret:a.r, base:a.b, bg:a.g,
+      uvt:P.uvt?a.g/P.uvt:0};
+  }
+
+  return {
+    cedula:r.cedula, nombre:r.nombre, nov:r.nov,
+    suman:suman, restan:restan,
+    baseP102:Math.round(r.norma.baseRet||0),
+    aportes:Math.round(d.aportes||0),
+    subtotal:Math.round(d.sub||0),
+    reTeorica:Math.round(d.reTeo||0),
+    topeRE:Math.round(d.tope||0),
+    reAplicada:Math.round(d.re||0),
+    topeOpero:(d.reTeo||0)>(d.tope||0),
+    baseGravable:Math.round(d.bg||0),
+    uvtBase:uvtBase, uvt:P.uvt, umbral:Math.round(umbral),
+    tramo:T, supera:(uvtBase>95),
+    retencion:Math.round(r.retRep||0),
+    retNormativa:Math.round(r.norma.rP1||0),
+    ordinario:Math.round(ordinario), extra:extra, sumaExtra:Math.round(sumaExtra),
+    bgSinExtra:Math.round(bgSinExtra),
+    uvtSinExtra:P.uvt?bgSinExtra/P.uvt:0,
+    retSinExtra:retSinExtra,
+    porExtra:(retSinExtra===0&&
+      Math.max(Math.round(r.retRep||0),Math.round((r.norma&&r.norma.rP1)||0))>0),
+    prev:prev
+  };
+}
+
+/* Servidores a quienes este mes se les retuvo y el mes de comparación no.
+   Son los que suelen reclamar, y los que hay que poder explicar. */
+function nuevosConRetencion(clave){
+  if(!S.computed) return null;
+  var h=S.historico&&S.historico[clave];
+  if(!h) return {sinMes:true};
+  if(!h.ret) return {sinDetalle:true, etiqueta:h.etiqueta};
+  var lista=[];
+  S.computed.rows.forEach(function(r){
+    var a=h.ret[String(r.cedula)];
+    if(!a||a.r>0) return;                  /* ya retenía el mes de comparación */
+    var liquidada=Math.round(r.retRep||0);
+    var normativa=Math.round((r.norma&&r.norma.rP1)||0);
+    if(liquidada<=0&&normativa<=0) return; /* sigue por debajo del umbral */
+    var j=justificacionRetencion(r,clave);
+    /* Dos situaciones distintas: a quien el sistema ya le retuvo hay que
+       explicarle por qué, y de quien debería retenerse y no se hizo hay que
+       avisar antes de cerrar la nómina. */
+    j.caso=(liquidada>0)?'retenido':'pendiente';
+    j.liquidada=liquidada;
+    lista.push(j);
+  });
+  lista.sort(function(a,b){ return Math.max(b.retencion,b.retNormativa)-
+    Math.max(a.retencion,a.retNormativa); });
+  return {etiqueta:h.etiqueta, lista:lista,
+    retenidos:lista.filter(function(x){return x.caso==='retenido';}).length,
+    pendientes:lista.filter(function(x){return x.caso==='pendiente';}).length};
+}
+
+/* Mes archivado inmediatamente anterior al período activo */
+function mesAnteriorHist(){
+  if(!S.computed) return null;
+  var k=clavePeriodo(S.computed.periodo);
+  var cl=Object.keys(S.historico||{}).filter(function(x){ return x<k; }).sort();
+  return cl.length?cl[cl.length-1]:null;
 }
 
 /* Comparativo entre el período activo y un mes del histórico */
@@ -1200,7 +1522,9 @@ function consolidarPILA(filas){
       o.diasArlCero=(o.diasArlCero||0)+d;
     }
   }
-  filas.forEach(function(f){
+  filas.forEach(function(fo){
+    /* Se trabaja sobre una copia: quien llame conserva sus filas intactas */
+    var f=(idx[fo.cedula]?fo:(function(){var o={};for(var k in fo) o[k]=fo[k];return o;})());
     var c=f.cedula;
     if(!idx[c]){
       f.renglones=1;
@@ -2093,6 +2417,78 @@ function recompute(){
  * Usa pdf.js (ya bundlado) con agrupación por coordenada Y
  * Limpieza de marca de agua "Reporte Definición"
  * ======================================================================= */
+/* =========================================================================
+ * EXTRACCION DE LINEAS DEL PDF DE KACTUS
+ *
+ * El PDF lleva impresa en vertical la marca de agua "Reporte Definición".
+ * pdf.js la entrega como items de UN solo caracter, uno por renglon, en una
+ * misma columna. Eso rompia la lectura de dos maneras:
+ *
+ *  a) Al unir los items de un renglon, la letra suelta quedaba pegada a una
+ *     palabra: "cFONSECA", "ADMnINISTRATIVO", "MED-fPREPAGADA".
+ *
+ *  b) Peor: la letra se dibuja a una Y intermedia entre dos renglones. El
+ *     agrupador anclaba el grupo en la Y del PRIMER item, de modo que la
+ *     letra corria el ancla y partia el renglon en dos. El encabezado de un
+ *     servidor salia asi, y ademas en orden invertido:
+ *
+ *         "c Salario Básico 3.654.949,00"
+ *         "47437504 FONSECA FONSECA FLOR MIRIAM"
+ *
+ *     Partido de esa forma, EMP_HDR no reconocia al servidor y TODOS sus
+ *     conceptos se acumulaban sobre el servidor anterior, que ademas tomaba
+ *     como propia la linea TOTAL IDENTIFICACION del siguiente. En la
+ *     prenomina de junio de 2026 esto afectaba a 6 servidores.
+ *
+ * La correccion: descartar los glifos de la marca de agua ANTES de agrupar
+ * —son items de una sola letra, y ninguna celda real del reporte es una
+ * letra sola— y encadenar el agrupamiento contra la Y del item anterior en
+ * vez de anclarlo en el primero. El interlineado del reporte es de unas 14
+ * unidades y los desfases dentro de un renglon no pasan de 1,1, de modo que
+ * el encadenado no puede fundir dos renglones.
+ * ======================================================================= */
+var WM_GLIFO=/^[A-Za-zÁÉÍÓÚÑáéíóúñ]$/;
+
+function lineasDePaginas(pages,opt){
+  opt=opt||{};
+  /* La marca de agua es del reporte de KACTUS. La planilla del operador no la
+     lleva y si usa marcas de una sola letra —la X de novedad—, de modo que
+     alli el filtro se desactiva. */
+  var quitarWM=(opt.marcaAgua!==false);
+  var lineas=[], Y_TOL=2.5, SPAN_MAX=Y_TOL*3;
+  pages.forEach(function(tc){
+    var items=tc.items.map(function(it){
+        return {y:it.transform[5], x:it.transform[4], s:it.str};
+      })
+      .filter(function(it){
+        if(!it.s||!it.s.trim()) return false;
+        /* Glifo suelto de la marca de agua: una sola letra */
+        if(quitarWM && WM_GLIFO.test(it.s.trim())) return false;
+        return true;
+      })
+      .sort(function(a,b){ return b.y-a.y; });
+
+    var grupo=[], yUlt=null, yTop=null;
+    function cerrar(){
+      if(!grupo.length) return;
+      var ln=grupo.sort(function(a,b){ return a.x-b.x; })
+        .map(function(g){ return g.s; }).join(' ').replace(/\s+/g,' ').trim();
+      if(ln) lineas.push(ln);
+      grupo=[]; yUlt=null; yTop=null;
+    }
+    items.forEach(function(it){
+      if(yUlt===null){ grupo.push(it); yUlt=it.y; yTop=it.y; return; }
+      /* Encadenado contra el item anterior, con tope al alto del grupo */
+      if(Math.abs(it.y-yUlt)<=Y_TOL && Math.abs(it.y-yTop)<=SPAN_MAX){
+        grupo.push(it); yUlt=it.y; return;
+      }
+      cerrar(); grupo.push(it); yUlt=it.y; yTop=it.y;
+    });
+    cerrar();
+  });
+  return lineas;
+}
+
 var WM_SINGLE=/^[a-záéíóúñ]$/;
 var WM_UPPER=/[A-ZÁÉÍÓÚÑ]/;
 var WM_LOWER=/[a-záéíóúñ]/;
@@ -2142,8 +2538,51 @@ var DEDUCS=new Set(['500','501','502','504','506','507','508','513','517',
   '805','817','820','823','828','829','831','838','839','847','848','851',
   '868','869','873','876','878','883','888','892','896','901']);
 
+/* Trozos de un encabezado partido:
+     "47437504 FONSECA FONSECA FLOR MIRIAM"   (cédula y nombre, sin importe)
+     "Salario Básico 3.654.949,00"            (etiqueta e importe, sin cédula)
+   Pueden salir en cualquier orden, porque la Y de la etiqueta es un punto
+   mayor que la del nombre. */
+var HDR_IZQ=new RegExp('^(\\d{6,12})\\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ.\'\\s-]{3,})$');
+var HDR_DER=new RegExp('^Salario\\s*B[áa]sico\\s+('+NUM_PAT+')\\s*$');
+
+/* Une los trozos antes de analizar. Devuelve una lista nueva; deja constancia
+   de cuántos encabezados hubo que reconstruir, que es justo el sintoma del
+   cruce de datos. */
+function recomponerEncabezados(lines){
+  var out=[], rep=0;
+  for(var i=0;i<lines.length;i++){
+    var a=stripWatermark(String(lines[i]).replace(/\s+$/,''));
+    if(a===null){ out.push(lines[i]); continue; }
+    a=a.trim();
+    var b=null;
+    if(i+1<lines.length){
+      b=stripWatermark(String(lines[i+1]).replace(/\s+$/,''));
+      b=(b===null)?null:b.trim();
+    }
+    if(b!==null && b!==undefined){
+      if(HDR_IZQ.test(a) && HDR_DER.test(b)){
+        out.push(a+' '+b); i++; rep++; continue;
+      }
+      if(HDR_DER.test(a) && HDR_IZQ.test(b)){
+        out.push(b+' '+a); i++; rep++; continue;
+      }
+    }
+    out.push(lines[i]);
+  }
+  recomponerEncabezados.reparados=rep;
+  return out;
+}
+
 function parseLines(lines){
+  lines=recomponerEncabezados(lines);
   var emps=[],cur=null,per=null;
+  /* Control independiente del parser: en el reporte de KACTUS cada servidor
+     cierra con una linea TOTAL IDENTIFICACION. Si se reconocen menos
+     servidores que lineas de total, falto algun encabezado y los conceptos de
+     ese servidor quedaron sumados al anterior. Es la deteccion que faltaba:
+     el descuadre se veia, pero no su causa. */
+  var nTotales=0;
 
   function push(e){if(e) emps.push(e);}
 
@@ -2176,6 +2615,7 @@ function parseLines(lines){
     }
     var tm=TOT_RE.exec(ln);
     if(tm){
+      nTotales++;
       cur.totDev=n2s(tm[1]);
       cur.totDesc=n2s(tm[2]);
       cur.totNeto=tm[3]?n2s(tm[3]):(cur.totDev-cur.totDesc);
@@ -2215,7 +2655,12 @@ function parseLines(lines){
       e.totDev=s;
     }
   });
-  return{employees:emps,periodo:per,source:'pdf'};
+  /* Los totales que aparecen antes del primer encabezado reconocido
+     corresponden a servidores de paginas anteriores ya contados. */
+  return{employees:emps,periodo:per,source:'pdf',
+         hdrReparados:recomponerEncabezados.reparados||0,
+         totalesEnPDF:nTotales,
+         encabezadosFaltantes:Math.max(0,nTotales-emps.length)};
 }
 
 /* =========================================================================
@@ -2237,38 +2682,7 @@ function loadPdf(buf){
     }
     return Promise.all(tasks);
   }).then(function(pages){
-    var lines=[];
-    /* Tolerancia vertical: los montos de KACTUS se renderizan 1-2 unidades
-       desplazados respecto al nombre del concepto. Con redondeo exacto quedaban
-       en líneas separadas y el parser no reconocía ningún concepto. */
-    var Y_TOL=2.5;
-    pages.forEach(function(tc){
-      /* Ordenar por Y descendente (pdf.js: Y crece hacia arriba) */
-      var items=tc.items.map(function(it){
-        return {y:it.transform[5], x:it.transform[4], s:it.str};
-      }).filter(function(it){ return it.s && it.s.trim(); })
-        .sort(function(a,b){ return b.y-a.y; });
-
-      var grupo=[], yRef=null;
-      function cerrar(){
-        if(!grupo.length) return;
-        var ln=grupo.sort(function(a,b){return a.x-b.x;})
-          .map(function(g){return g.s;}).join(' ').replace(/\s+/g,' ').trim();
-        if(ln) lines.push(ln);
-        grupo=[];
-      }
-      items.forEach(function(it){
-        if(yRef===null || Math.abs(it.y-yRef)<=Y_TOL){
-          if(yRef===null) yRef=it.y;
-          grupo.push(it);
-        } else {
-          cerrar();
-          yRef=it.y;
-          grupo.push(it);
-        }
-      });
-      cerrar();
-    });
+    var lines=lineasDePaginas(pages);
     var r=parseLines(lines);
     /* Cuadre por empleado: detecta conceptos atribuidos al servidor equivocado */
     r.descuadres=validarCuadre(r.employees);
@@ -2366,26 +2780,33 @@ function loadPilaPDF(buf,nombre){
       tareas.push(pdf.getPage(i).then(function(pg){return pg.getTextContent();}));
     return Promise.all(tareas);
   }).then(function(pages){
-    var lineas=[], Y_TOL=2.5;
-    pages.forEach(function(tc){
-      var items=tc.items.map(function(it){
-        return {y:it.transform[5],x:it.transform[4],s:it.str};
-      }).filter(function(it){return it.s&&it.s.trim();})
-        .sort(function(a,b){return b.y-a.y;});
-      var g=[],yr=null;
-      function cerrar(){
-        if(!g.length) return;
-        var ln=g.sort(function(a,b){return a.x-b.x;})
-          .map(function(v){return v.s;}).join(' ').replace(/\s+/g,' ').trim();
-        if(ln) lineas.push(ln);
-        g=[];
-      }
-      items.forEach(function(it){
-        if(yr===null||Math.abs(it.y-yr)<=Y_TOL){ if(yr===null) yr=it.y; g.push(it); }
-        else { cerrar(); yr=it.y; g.push(it); }
+    var lineas=lineasDePaginas(pages,{marcaAgua:false});
+
+    /* Primero se intenta la lectura directa de la Planilla Resumen, que trae
+       las columnas en orden fijo y, sobre todo, la tarifa de ARL por afiliado. */
+    var directo=parsePlanillaResumen(lineas);
+    if(directo&&directo.length){
+      S.pilaDet=consolidarPILA(directo);
+      S.pilaPeriodo=parsePlanillaResumen.periodo||null;
+      S.arlPILA=mapaARLdesdePILA();
+      S.pilaMatriz=null; S.pilaHdr=0; S.pilaMap=null; S.pilaDebug=null;
+      S.pilaArchivo=nombre; S.error='';
+      var cls={};
+      S.pilaDet.forEach(function(x){
+        if(x.tarifaArl>0) cls[x.tarifaArl.toFixed(3)]=(cls[x.tarifaArl.toFixed(3)]||0)+1;
       });
-      cerrar();
-    });
+      var partidos=S.pilaDet.filter(function(x){return (x.renglones||1)>1;}).length;
+      S.pilaAviso='Planilla leída directamente: '+directo.length+' renglón(es) de detalle, '+
+        S.pilaDet.length+' afiliado(s) tras consolidar'+
+        (partidos?' ('+partidos+' con el mes partido por novedad)':'')+'. '+
+        'Tarifas de ARL encontradas: '+
+        Object.keys(cls).sort().map(function(k){return k+'% ('+cls[k]+')';}).join(' · ')+
+        '. No hace falta asignar columnas.';
+      if(S.data) recompute();
+      S.loading=false; S.view='pila';
+      S.guardado.pendiente=true; guardarEstado(); render();
+      return;
+    }
 
     /* Una fila de detalle: documento de 5 a 12 dígitos y al menos 3 importes */
     var RE_DOC=/\b(\d{5,12})\b/;
@@ -2434,6 +2855,83 @@ function loadPilaPDF(buf,nombre){
     S.error='Error al leer el PDF de la planilla: '+e.message;
     S.loading=false; render();
   });
+}
+
+/* =========================================================================
+ * LECTOR DIRECTO DE LA PLANILLA RESUMEN DEL OPERADOR
+ *
+ * La "Planilla Resumen" trae una fila por afiliado con esta forma:
+ *
+ *   1 CC 24228453 ABRIL ACEVEDO 25-14 30 $4,271,774 $683,500
+ *     EPS00 30 $4,271,774 $534,000  CCF69 30 $4,271,774 $170,900
+ *     14-23 30 $4,271,774 0.522% $22,300  30 $4,271,774 $213,800  No $1,624,500
+ *
+ * Son cinco bloques —pension, salud, caja, riesgos y parafiscales— cada uno
+ * con dias, IBC y aporte, mas la TARIFA DE ARL del afiliado y el total. Ese
+ * orden es fijo, de modo que la fila se puede leer sin pedirle al usuario que
+ * asigne columnas una por una.
+ *
+ * La tarifa de riesgos es lo que hace valiosa esta lectura: la fija el centro
+ * de trabajo (Decreto 1072 de 2015, art. 2.2.4.3.5) y la planilla la trae
+ * servidor por servidor. En los dias de novedad el operador la liquida al
+ * 0,000 %, y por eso el servidor con novedad aparece en dos renglones.
+ * ======================================================================= */
+var PILA_FILA=/^\s*\d{1,4}\s+(?:CC|TI|CE|PA|RC|PE|NU|CD|SC|NIT)\s+(\d{5,12})\s+(.*)$/i;
+
+function montoPILA(t){
+  return Math.round(parseFloat(String(t).replace(/[^\d.-]/g,''))||0);
+}
+
+/* Devuelve las filas del detalle, o null si el PDF no tiene esta estructura */
+function parsePlanillaResumen(lineas){
+  var out=[], vistas=0;
+  /* Periodo que declara la planilla. Sirve para avisar cuando se cruza contra
+     una nomina de otro mes, que es el error mas facil de cometer y el que mas
+     diferencias falsas produce. */
+  parsePlanillaResumen.periodo=null;
+  for(var q=0;q<lineas.length&&q<60;q++){
+    var mp=/Periodo\s+Salud\s*:?\s*(\d{4})[-\/](\d{1,2})/i.exec(String(lineas[q]));
+    if(mp){ parsePlanillaResumen.periodo={anio:+mp[1], mes:+mp[2]}; break; }
+  }
+  for(var i=0;i<lineas.length;i++){
+    var ln=String(lineas[i]||'');
+    var m=PILA_FILA.exec(ln);
+    if(!m) continue;
+    var ced=m[1], resto=m[2];
+    /* Importes del renglon, en el orden fijo del reporte */
+    var montos=(resto.match(/\$\s*[\d,\.]+/g)||[]).map(montoPILA);
+    if(montos.length<10) continue;          /* no es una fila de detalle */
+    /* Dias de cada subsistema: el entero que precede a cada IBC.
+       El numero debe venir precedido de espacio o de inicio de linea: sin esa
+       condicion, el patron tomaba las tres ultimas cifras del importe anterior
+       —de "$4,200,463 $672,100" sacaba 463 como si fueran dias— y los dias de
+       salud, caja, riesgos y parafiscales salian disparatados. */
+    var dias=[], md, rd=/(?:^|\s)(\d{1,3})\s+\$/g;
+    while((md=rd.exec(resto))!==null) dias.push(parseInt(md[1],10));
+    /* Tarifa de ARL */
+    var mt=/(\d+[.,]\d{1,3})\s*%/.exec(resto);
+    var tarifa=mt?parseFloat(mt[1].replace(',','.')):null;
+    /* Nombre: lo que va antes del primer codigo o marcador de novedad */
+    var nom=resto.split(/\s(?:\d{2}-\d{2}|\d{5}|EPS\d|CCF\d)/)[0]
+      .replace(/\s+X(\s+X)*\s*$/,'').replace(/\s+/g,' ').trim();
+    /* El apellido sigue en el renglon siguiente cuando no cabe */
+    var sig=String(lineas[i+1]||'');
+    if(sig && sig.indexOf('$')<0 && !PILA_FILA.test(sig)){
+      var cola=sig.replace(/[^A-ZÁÉÍÓÚÑ\s]/g,'').replace(/\s+/g,' ').trim();
+      if(cola && cola.length>2) nom=(nom+' '+cola).trim();
+    }
+    out.push({
+      cedula:ced, nombre:nom,
+      diasPen:   dias[0]!==undefined?dias[0]:null, ibcPen:montos[0], aporPen:montos[1],
+      diasSal:   dias[1]!==undefined?dias[1]:null, ibcSalud:montos[2], aporSalud:montos[3],
+      ibcCcf:montos[4], aporCcf:montos[5],
+      ibcArl:montos[6], tarifaArl:tarifa, aporArl:montos[7],
+      ibcParaf:montos[8], aporParaf:montos[9],
+      fsp:null
+    });
+    vistas++;
+  }
+  return vistas?out:null;
 }
 
 /* Carga de la planilla PILA (Excel, CSV o texto delimitado) */
@@ -2932,6 +3430,898 @@ function exportActaResumen(){
 /* =========================================================================
  * EXPORTACIÓN INFORME WORD (HTML .doc — abre en Word y LibreOffice)
  * ======================================================================= */
+/* =========================================================================
+ * RELACION DE CASOS PARA LA TECNICA DE NOMINA
+ *
+ * El informe de auditoria esta dirigido a la Direccion: dictamina, califica y
+ * deja hallazgos. Este documento es otra cosa y tiene otro lector: quien
+ * liquida la nomina en KACTUS. No dictamina. Relaciona caso por caso que dice
+ * el sistema, que deberia decir, en que norma se sustenta y que hay que tocar
+ * para corregirlo, con una columna en blanco para que ella responda.
+ *
+ * De ahi tres decisiones de forma:
+ *  - Nada de calificaciones ni de lenguaje de hallazgo. Es una relacion de
+ *    trabajo, no un juicio sobre quien liquida.
+ *  - Los casos van agrupados por tipo, para que se revisen en tandas: todos
+ *    los de IBC juntos, todos los de retencion juntos.
+ *  - Se dice tambien que quedo conforme. Sin eso, quien lo recibe no sabe que
+ *    ya no tiene que mirar, y vuelve a revisar lo que esta bien.
+ * ======================================================================= */
+function datosParaTecnica(){
+  if(!S.computed) return null;
+  var C=S.computed, P=S.P, rows=C.rows;
+  var B={ibc:[], ret:[], bsp:[], asig:[], arl:[], pila:[], desc:[], nov:[], hret:[],
+         umbral:[]};
+  /* Umbral de materialidad del documento de trabajo. El control de auditoria
+     usa 100 pesos, que es lo correcto para dictaminar; pero una relacion de
+     tareas con noventa diferencias de doscientos pesos entierra las diez que
+     de verdad hay que mirar. Las descartadas se cuentan y se declaran. */
+  var UMBRAL=1000, omit={ibc:0, ret:0};
+
+  /* ── IBC de seguridad social ───────────────────────────────────────── */
+  rows.forEach(function(r){
+    var n=r.norma, rep=r.ssRep, norm=r.ssNorm;
+    if(Math.abs(norm-rep)<=P.tol) return;
+    if(Math.abs(norm-rep)<UMBRAL){ omit.ibc++; return; }
+    B.ibc.push({ced:r.cedula, nom:r.nombre, nov:r.nov,
+      ibc:n.ibcSS, regla:(n.ibcDet&&n.ibcDet.regla)||'',
+      sistema:rep, norma:Math.round(norm), dif:Math.round(norm-rep),
+      detalle:'Salud '+cop(n.sT)+' · pensión '+cop(n.pT)+
+        (n.fsp?' · FSP '+cop(n.fsp):'')});
+  });
+
+  /* ── Retención en la fuente ────────────────────────────────────────── */
+  rows.forEach(function(r){
+    var d=r.diag;
+    if(!d||d.cod.indexOf('OK_')===0||d.cod==='NO_APLICA') return;
+    if(d.cod!=='DATOS_CRUZADOS'&&Math.abs(d.dif||0)<UMBRAL){ omit.ret++; return; }
+    B.ret.push({ced:r.cedula, nom:r.nombre, etiq:d.etiq, cod:d.cod,
+      sistema:r.retRep, norma:Math.round(r.retRep+(d.dif||0)),
+      dif:Math.round(d.dif||0), nota:d.nota||'', base:r.norma.baseRet});
+  });
+
+  /* ── Bonificación por servicios prestados ──────────────────────────── */
+  var V=verificarBSP();
+  if(V){
+    V.sinPagar.forEach(function(k){
+      B.bsp.push({ced:k.r.cedula, nom:k.r.nombre, tipo:'No liquidada',
+        ingreso:k.a&&k.a.ingreso?fmtFecha(k.a.ingreso):'',
+        anios:k.a?k.a.anios:'', pagado:k.r.c['114']||0,
+        esperado:Math.round(k.r.norma.bspNorm||0)});
+    });
+    V.pagadaFuera.forEach(function(k){
+      B.bsp.push({ced:k.r.cedula, nom:k.r.nombre, tipo:'Liquidada fuera del aniversario',
+        ingreso:k.a&&k.a.ingreso?fmtFecha(k.a.ingreso):'',
+        anios:k.a?k.a.anios:'', pagado:k.r.c['114']||0, esperado:0});
+    });
+  }
+
+  /* ── Asignación básica y gastos de representación ──────────────────── */
+  var A=contrasteAsignacion();
+  if(A) A.filas.forEach(function(f){
+    B.asig.push({ced:f.cedula, nom:f.nombre, cargo:f.cargo, grado:f.grado,
+      sistema:f.nomina, planta:f.planta, dif:Math.round(f.dif), pct:f.pct,
+      gr:f.gr, grPlanta:f.grPlanta, difGR:Math.round(f.difGR),
+      soloGR:(!f.difAsig&&f.difGR_)});
+  });
+
+  /* ── Clase de riesgo de ARL ────────────────────────────────────────── */
+  var R=resumenARL();
+  if(R&&R.sinClase){
+    rows.forEach(function(r){
+      var t=r.norma.arlTarifa;
+      if(!t||t.fuente!=='Parametro por defecto') return;
+      B.arl.push({ced:r.cedula, nom:r.nombre, ibc:r.norma.ibcSS,
+        aplicada:P.arl, aporte:r.norma.arl});
+    });
+  }
+
+  /* ── Conciliación con la planilla ──────────────────────────────────── */
+  if(S.pilaDet&&S.pilaDet.length){
+    var X=cruzarPILA();
+    if(X&&X.filas) X.filas.forEach(function(f){
+      if(f.ok) return;
+      B.pila.push({ced:f.row.cedula, nom:f.row.nombre,
+        difs:f.difs.join(' · '), rengl:(f.pila.renglones||1)});
+    });
+    if(X&&X.soloKactus) X.soloKactus.forEach(function(r){
+      B.pila.push({ced:r.cedula, nom:r.nombre,
+        difs:'No aparece en la planilla del operador', rengl:0});
+    });
+  }
+
+  /* ── Descuentos sobre el tope legal ────────────────────────────────── */
+  rows.forEach(function(r){
+    var n=r.norma;
+    if(!n.alertaLib&&!n.alertaAlim&&!n.alertaEmb) return;
+    var q=[];
+    if(n.alertaLib)  q.push('Libranzas '+cop(n.dVolunt)+' sobre un tope de '+
+      cop(n.topeLib)+' (exceso '+cop(n.excesoLib)+')');
+    if(n.alertaAlim) q.push('Embargo de alimentos '+cop(n.dAlimentos)+
+      ' sobre un tope de '+cop(n.topeAlim));
+    if(n.alertaEmb)  q.push('Embargo civil '+cop(n.dEmbargo)+
+      ' sobre un tope de '+cop(n.topeEmbCivil)+' (exceso '+cop(n.excesoEmb)+')');
+    B.desc.push({ced:r.cedula, nom:r.nombre, neto:n.netoLeg, q:q.join('; ')});
+  });
+
+  /* ── Novedades sin IBC del mes anterior ────────────────────────────── */
+  rows.forEach(function(r){
+    if(r.nov==='NORMAL') return;
+    if(S.ibcAnt[String(r.cedula)]) return;
+    B.nov.push({ced:r.cedula, nom:r.nombre, nov:r.nov,
+      dias:(r.norma.ibcDet&&r.norma.ibcDet.diasNov)||0});
+  });
+
+  /* ── Variación de retención sin explicación en los conceptos ────────
+     Solo entran los casos que no cuadran. Una retención que subió porque
+     entró una prima no es un caso para revisar: es lo que debía pasar. */
+  var HR=historialRetencion(S.histRetMes||mesAnteriorHist());
+  if(HR&&HR.filas) HR.filas.forEach(function(f){
+    if(f.clase!=='BASE SIN RETENCIÓN'&&f.clase!=='RETENCIÓN SIN BASE'&&
+       f.clase!=='SIN CONCEPTOS IDENTIFICADOS') return;
+    B.hret.push({ced:f.cedula, nom:f.nombre, clase:f.clase,
+      retAnt:f.retAnt, retAct:f.retAct, dRet:f.dRet,
+      baseAnt:f.baseAnt, baseAct:f.baseAct, dBase:f.dBase,
+      proc:(f.procAnt===f.procAct?f.procAnt:f.procAnt+' → '+f.procAct),
+      nota:f.nota});
+  });
+  /* ── Servidores que cruzaron el umbral de las 95 UVT ───────────────
+     Son los que generan inconformidad: nunca les habían retenido y este mes
+     sí. No son un error, pero la técnica tiene que poder sustentarlo. */
+  var NU=nuevosConRetencion(S.histRetMes||mesAnteriorHist());
+  if(NU&&NU.lista) NU.lista.forEach(function(j){
+    B.umbral.push(j);
+  });
+  datosParaTecnica.umbralEtiqueta=(NU&&NU.etiqueta)||'';
+  datosParaTecnica.hrEtiqueta=(HR&&HR.etiqueta)||'';
+  datosParaTecnica.hrExplicados=(HR&&HR.filas)?HR.filas.filter(function(f){
+    return f.clase==='VARIACIÓN EXPLICADA'; }).length:0;
+
+  /* Lo que mas pesa primero: asi la revision empieza por donde rinde */
+  B.ibc.sort(function(a,b){ return Math.abs(b.dif)-Math.abs(a.dif); });
+  B.ret.sort(function(a,b){ return Math.abs(b.dif)-Math.abs(a.dif); });
+  var total=0; Object.keys(B).forEach(function(k){ total+=B[k].length; });
+  return {B:B, total:total, rows:rows, umbral:UMBRAL, omit:omit};
+}
+
+/* =========================================================================
+ * SUSTENTACION TECNICA DE LA RETENCION
+ *
+ * Soporte de una observacion, no una certificacion. Quien revisa la nomina no
+ * expide documentos al servidor: deja la observacion en el informe, el tecnico
+ * corrige o aclara en KACTUS, y si hay que responderle al servidor, eso lo
+ * hace la Direccion de Talento Humano. Por eso el documento va dirigido a la
+ * Direccion, habla del servidor en tercera persona y se firma como proyectado,
+ * no como certificado.
+ * ======================================================================= */
+function enumera(a){
+  if(!a||!a.length) return '';
+  if(a.length===1) return a[0];
+  return a.slice(0,-1).join(', ')+' y '+a[a.length-1];
+}
+
+function exportSustentacionRetencion(cedula){
+  if(!S.computed){alert('Cargue una prenómina primero.');return;}
+  var r=null;
+  S.computed.rows.forEach(function(x){ if(String(x.cedula)===String(cedula)) r=x; });
+  if(!r){alert('No se encontró el servidor.');return;}
+  var j=justificacionRetencion(r,S.histRetMes||mesAnteriorHist());
+  var P=S.P, I=S.informe;
+  var per=S.computed.periodo||{mes:0,anio:2026};
+  var MESES=['','enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+    'septiembre','octubre','noviembre','diciembre'];
+  var perStr=(MESES[per.mes]||'mes')+' de '+per.anio;
+  var regTxt=S.regimen==='oficial'?'Trabajadores Oficiales':'Empleados Públicos';
+  var ANCHO=16.59;
+  var yaRetenido=(j.retencion>0);
+  var valorRet=yaRetenido?j.retencion:j.retNormativa;
+
+  function fila(et,va,sub,fuerte){
+    return '<tr>'+
+      '<td style="border:0;border-bottom:0.5pt solid #E6E9EE;padding:4pt 6pt 4pt 0;'+
+        'font-size:10pt;vertical-align:top;text-align:left">'+
+        (fuerte?'<strong>'+et+'</strong>':et)+
+        (sub?'<br><span style="font-size:8.5pt;color:#5A6472">'+sub+'</span>':'')+'</td>'+
+      '<td nowrap style="border:0;border-bottom:0.5pt solid #E6E9EE;padding:4pt 0;'+
+        'font-size:10pt;text-align:right;white-space:nowrap;vertical-align:top">'+
+        (fuerte?'<strong>'+va+'</strong>':va)+'</td></tr>';
+  }
+  var tabla='<table width="100%" style="border-collapse:collapse;margin:4pt 0 10pt;'+
+    'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+    '<colgroup><col width="'+(ANCHO*0.68).toFixed(2)+'cm"><col width="'+
+      (ANCHO*0.32).toFixed(2)+'cm"></colgroup>'+
+    '<tr><td colspan="2" style="border:0;padding:6pt 0 3pt;font-size:10pt;'+
+      'color:#1A3557;text-align:left"><strong>Conceptos del mes que forman la base</strong>'+
+      ' (Prototipo 102 de KACTUS)</td></tr>'+
+    j.suman.map(function(x){
+      return fila('<span style="color:#5A6472">'+esc(x.cod)+'</span>&nbsp; '+esc(x.nom),
+        cop(x.val));
+    }).join('')+
+    fila('Total de la base','&nbsp;'+cop(j.baseP102),'',1)+
+    '<tr><td colspan="2" style="border:0;padding:8pt 0 3pt;font-size:10pt;'+
+      'color:#1A3557;text-align:left"><strong>Menos aportes obligatorios</strong> '+
+      '(ingresos no constitutivos de renta, Art. 55 y 56 E.T.)</td></tr>'+
+    j.restan.map(function(x){
+      return fila('<span style="color:#5A6472">'+esc(x.cod)+'</span>&nbsp; '+esc(x.nom),
+        '−'+cop(x.val));
+    }).join('')+
+    fila('Subtotal','&nbsp;'+cop(j.subtotal),'',1)+
+    fila('Menos renta exenta del 25 %','−'+cop(j.reAplicada),
+      'Artículo 206 numeral 10 del Estatuto Tributario'+
+      (j.topeOpero?'. Calculada en '+cop(j.reTeorica)+', se limitó al tope mensual de '+
+        cop(j.topeRE)+', que son 790 UVT anuales divididas en doce meses.':'.'))+
+    fila('Base gravable del mes','&nbsp;'+cop(j.baseGravable),'',1)+
+    fila('Base gravable expresada en UVT','&nbsp;'+dec2(j.uvtBase)+' UVT',
+      'UVT de la vigencia: '+cop(j.uvt)+' (Resolución DIAN 000238 de 2025)',1)+
+    fila('Umbral a partir del cual la tabla aplica','&nbsp;95,00 UVT = '+cop(j.umbral),
+      'Artículo 383 del Estatuto Tributario')+
+    fila('Tramo que corresponde','&nbsp;'+esc(j.tramo.txt),'',1)+
+    fila(yaRetenido?'Retención practicada':'Retención que corresponde',
+      '&nbsp;'+cop(valorRet),
+      'Aproximada al múltiplo de mil más cercano, artículo 577 del Estatuto Tributario'+
+      (yaRetenido?'':'. La nómina del período aún no la liquida.'),1)+
+    '</table>';
+
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'+
+    '@page WordSection1{size:21.59cm 27.94cm;margin:2.2cm 2.5cm 2.2cm 2.5cm;'+
+      'mso-paper-source:0}'+
+    'div.WordSection1{page:WordSection1}'+
+    'body{font-family:Arial,sans-serif;font-size:11pt;color:#1C1C1E;'+
+      'text-align:justify;line-height:1.35;margin:0}'+
+    'h1{font-family:Arial,sans-serif;color:#1A3557;font-size:12pt;'+
+      'border-bottom:1.25pt solid #C45B2E;padding-bottom:3pt;'+
+      'margin:15pt 0 7pt;text-align:left}'+
+    'p{margin:6pt 0;text-align:justify;font-family:Arial,sans-serif}'+
+    'td{text-align:left;font-family:Arial,sans-serif}'+
+    '</style></head><body><div class="WordSection1">'+
+    '<p style="text-align:center;margin:0 0 7pt">'+
+      '<img src="'+LOGO_FULL_B64+'" style="width:5.6cm;height:auto" alt=""></p>'+
+    '<p style="text-align:center;font-size:12pt;font-weight:bold;color:#1A3557;margin:0">'+
+      'GOBERNACIÓN DE CASANARE</p>'+
+    '<p style="text-align:center;color:#5A6472;font-size:9.5pt;margin:2pt 0 12pt">'+
+      'NIT 892.099.216 · Dirección de Talento Humano</p>'+
+    '<p style="text-align:center;font-size:14pt;font-weight:bold;color:#1A3557;margin:0">'+
+      'SUSTENTACIÓN TÉCNICA DE LA RETENCIÓN</p>'+
+    '<p style="text-align:center;font-size:10.5pt;color:#2563A8;margin:4pt 0 12pt">'+
+      'Nómina de '+esc(regTxt)+' — '+perStr+'</p>'+
+    '<table width="100%" style="border-collapse:collapse;margin:0 0 11pt;'+
+      'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+      '<colgroup><col width="'+(ANCHO*0.26).toFixed(2)+'cm"><col width="'+
+        (ANCHO*0.74).toFixed(2)+'cm"></colgroup>'+
+      '<tr><td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;background:#F4F6FA;'+
+        'font-size:9.5pt"><strong>Dirigido a</strong></td>'+
+        '<td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;font-size:9.5pt">'+
+        'Dirección de Talento Humano</td></tr>'+
+      '<tr><td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;background:#F4F6FA;'+
+        'font-size:9.5pt"><strong>Asunto</strong></td>'+
+        '<td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;font-size:9.5pt">'+
+        'Soporte de la observación sobre la retención liquidada a un servidor que no '+
+        'venía siendo objeto de retención</td></tr>'+
+      '<tr><td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;background:#F4F6FA;'+
+        'font-size:9.5pt"><strong>Servidor</strong></td>'+
+        '<td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;font-size:9.5pt">'+
+        esc(j.nombre)+' · C.C. '+esc(j.cedula)+
+        (j.nov!=='NORMAL'?' · Novedad del mes: '+esc(j.nov):'')+'</td></tr>'+
+    '</table>'+
+    (yaRetenido?'':'<p style="border:0.75pt solid #B45309;background:#FFFBEB;'+
+      'padding:7pt 10pt;margin:6pt 0;font-size:10pt"><strong style="color:#B45309">'+
+      'Retención no liquidada.</strong> La nómina de '+perStr+' no trae esta retención. '+
+      'Las cifras son el cálculo normativo sobre los conceptos del período, y la '+
+      'observación es que debe liquidarse antes de cerrar.</p>')+
+    '<h1>1. Por qué corresponde retener en este período</h1>'+
+    '<p>La retención en la fuente sobre rentas de trabajo por el Procedimiento 1 se '+
+    'calcula sobre el ingreso <strong>del mes</strong>, no sobre la asignación básica. La '+
+    'tabla del artículo 383 del Estatuto Tributario solo aplica cuando la base gravable '+
+    'del mes pasa de <strong>95 UVT</strong>, que para esta vigencia equivalen a '+
+    cop(j.umbral)+'. Por debajo de esa cifra la tarifa es del cero por ciento, y de ahí '+
+    'que haya meses sin retención.</p>'+
+    (j.porExtra
+      ? '<p>En este período el servidor recibió, además de su asignación ordinaria, '+
+        '<strong>'+cop(j.sumaExtra)+'</strong> por '+
+        enumera(j.extra.map(function(x){
+          return esc(x.nom).toLowerCase()+' ('+cop(x.val)+')'; }))+
+        '. Sin esos pagos la base gravable del mes habría quedado en '+cop(j.bgSinExtra)+
+        ', equivalente a '+dec2(j.uvtSinExtra)+' UVT, por debajo de las 95 y sin '+
+        'retención. Al sumarlos la base llegó a '+dec2(j.uvtBase)+' UVT y la tabla '+
+        'resulta aplicable.</p>'
+      : '<p>La base gravable del mes quedó en '+dec2(j.uvtBase)+' UVT, por encima de las '+
+        '95 UVT, de modo que la tabla del artículo 383 resulta aplicable.</p>')+
+    (j.prev?'<p>Para contrastar: en '+esc(j.prev.etiqueta)+' la base gravable fue de '+
+      cop(j.prev.bg)+', equivalente a '+dec2(j.prev.uvt)+' UVT. Al no llegar a las 95, '+
+      'ese mes no hubo retención.</p>':'')+
+    '<h1>2. Depuración de la base, paso a paso</h1>'+
+    tabla+
+    '<h1>3. Efecto en los períodos siguientes</h1>'+
+    '<p>La retención se calcula mes a mes sobre el ingreso de cada período. Si el mes '+
+    'siguiente no hay pagos adicionales y la base vuelve a quedar por debajo de las 95 '+
+    'UVT, no habrá retención.</p>'+
+    '<p>El valor retenido no se pierde: se descuenta del impuesto a cargo en la '+
+    'declaración de renta del año gravable y, si lo supera, queda como saldo a favor del '+
+    'servidor. Esta precisión suele ser la que resuelve la inconformidad, y conviene '+
+    'tenerla a la mano si el servidor consulta.</p>'+
+    '<h1>4. Fundamento normativo</h1>'+
+    '<p>Artículos 103, 383, 385, 388 y 577 del Estatuto Tributario; artículo 206 numeral '+
+    '10 del mismo estatuto para la renta exenta del veinticinco por ciento y su límite de '+
+    '790 UVT anuales; y Resolución DIAN 000238 de 2025, que fijó la UVT de la vigencia en '+
+    cop(j.uvt)+'.</p>'+
+    '<h1>5. Observación</h1>'+
+    '<p>'+(yaRetenido
+      ? 'La retención practicada reproduce la depuración del artículo 388 y el tramo del '+
+        'artículo 383 que corresponde a la base del período. Se deja la sustentación como '+
+        'soporte de la Dirección ante una eventual consulta del servidor.'
+      : 'La retención no fue liquidada en la nómina del período, pese a que la base '+
+        'gravable supera el umbral de 95 UVT. Se solicita su verificación y liquidación '+
+        'antes del cierre.')+'</p>'+
+    '<table width="100%" style="border-collapse:collapse;margin:24pt 0 0;'+
+      'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+      '<colgroup><col width="'+(ANCHO*0.47).toFixed(2)+'cm"><col width="'+
+        (ANCHO*0.06).toFixed(2)+'cm"><col width="'+(ANCHO*0.47).toFixed(2)+'cm"></colgroup>'+
+      '<tr><td style="border:0;border-top:0.75pt solid #1A3557;padding:5pt 0;'+
+        'text-align:center;font-size:10pt">Proyectó<br>'+
+        '<strong style="color:#1A3557">'+esc(I.nombre||'')+'</strong><br>'+
+        '<span style="font-size:8.5pt;color:#5A6472">'+
+        (I.contrato?'Contrato de prestación de servicios '+esc(I.contrato):'')+
+        '</span></td>'+
+      '<td style="border:0">&nbsp;</td>'+
+      '<td style="border:0;border-top:0.75pt solid #1A3557;padding:5pt 0;'+
+        'text-align:center;font-size:10pt">Revisó<br>'+
+        '<strong style="color:#1A3557">&nbsp;</strong><br>'+
+        '<span style="font-size:8.5pt;color:#5A6472">Dirección de Talento Humano'+
+        '</span></td></tr>'+
+    '</table>'+
+    '<p style="margin-top:14pt;font-size:8.5pt;color:#5A6472;text-align:left">'+
+      'Documento de trabajo interno. Las cifras provienen de la prenómina de '+perStr+
+      ' liquidada en KACTUS. Expedir constancia al servidor, si procede, corresponde a la '+
+      'Dirección de Talento Humano.</p>'+
+    '</div></body></html>';
+
+  var blob=new Blob(['\ufeff'+html],{type:'application/msword;charset=utf-8'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='SUSTENTACION_RETENCION_'+String(j.cedula)+'_'+
+    (MESES[per.mes]||'MES').toUpperCase()+'_'+per.anio+'.doc';
+  a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+}
+
+function exportRelacionTecnica(){
+  if(!S.computed){alert('Cargue una prenómina primero.');return;}
+  var D=datosParaTecnica();
+  var C=S.computed, P=S.P, rows=C.rows, B=D.B;
+  var per=C.periodo||{mes:0,anio:2026};
+  var MESES=['','enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+    'septiembre','octubre','noviembre','diciembre'];
+  var perStr=(MESES[per.mes]||'mes')+' de '+per.anio;
+  var regTxt=S.regimen==='oficial'?'Trabajadores Oficiales':'Empleados Públicos';
+  var I=S.informe;
+
+  function th(c,w){
+    return '<tr>'+c.map(function(x,i){
+      return '<th style="background:#1A3557;color:#FFFFFF;border:0.75pt solid #1A3557;'+
+        'padding:4pt 4pt;font-size:9pt;font-weight:bold;text-align:left;'+
+        'vertical-align:bottom'+(w&&w[i]?';width:'+w[i]:'')+'">'+x+'</th>';
+    }).join('')+'</tr>';
+  }
+  /* Celda de cifra. Ademas del nowrap —que algunos conversores ignoran— se
+     cambian los separadores por espacios duros, para que el importe no quede
+     partido en dos renglones en ningun visor. */
+  var MARCA='\u0001';            /* marca interna: esta celda es una cifra */
+  function mn(v){ return MARCA+v; }
+  var GRIS='font-size:8.5pt;color:#5A6472';
+  /* Identificación del servidor en una sola celda: nombre arriba, cédula y
+     contexto debajo en gris. Repartir esto en dos columnas obliga a estrechar
+     las de cifras, y entonces los importes se parten. */
+  function quien(ced,nom,sub){
+    return '<strong style="font-weight:normal">'+esc(nom)+'</strong>'+
+      '<br><span style="'+GRIS+'">C.C. '+esc(ced)+(sub?' · '+sub:'')+'</span>';
+  }
+  function celda(x,bg){
+    var cifra=(String(x).charAt(0)===MARCA);
+    var v=cifra?String(x).slice(1):x;
+    return '<td'+(cifra?' nowrap':'')+' style="border:0.75pt solid #C6CEDA;'+
+      'padding:3.5pt 4pt;font-size:9.5pt;vertical-align:top;background:'+(bg||'#FFFFFF')+
+      (cifra?';text-align:right;white-space:nowrap':'')+'">'+v+'</td>';
+  }
+  function tr(c,bg){
+    return '<tr>'+c.map(function(x){ return celda(x,bg); }).join('')+'</tr>';
+  }
+  var RESP='<td style="border:1pt solid #99A;padding:4pt 5pt;background:#FFFDF5;'+
+    'width:14%">&nbsp;</td>';
+  function trR(c,bg){
+    return '<tr>'+c.map(function(x){ return celda(x,bg); }).join('')+RESP+'</tr>';
+  }
+  /* Ancho útil de la página: 21,59 cm menos 1,5 cm de margen a cada lado */
+  var ANCHO=18.59;
+  function colgroup(pcts){
+    return '<colgroup>'+pcts.map(function(x){
+      var cm=(ANCHO*parseFloat(x)/100).toFixed(2)+'cm';
+      return '<col width="'+cm+'" style="width:'+cm+'">';
+    }).join('')+'</colgroup>';
+  }
+  /* Un bloque: por qué se revisa, la tabla de casos y qué hacer en KACTUS */
+  function bloque(num,titulo,porque,cabs,anchos,filas,quehacer){
+    if(!filas.length) return '';
+    /* Lo que suman los anchos dados es lo que queda para la columna de
+       respuesta: así el reparto siempre cierra en 100 y la tabla cae exacta
+       sobre los márgenes. */
+    var suma=anchos.reduce(function(a,x){ return a+parseFloat(x); },0);
+    var pct=anchos.concat([(100-suma).toFixed(1)+'%']);
+    return '<h1>'+num+'. '+titulo+' <span style="font-weight:normal;font-size:10.5pt;'+
+      'color:#5A6472">('+filas.length+' caso'+(filas.length===1?'':'s')+')</span></h1>'+
+      '<p style="background:#F4F6FA;border-left:2.5pt solid #2563A8;padding:7pt 10pt;'+
+      'margin:6pt 0;font-size:10pt">'+porque+'</p>'+
+      '<table width="100%" style="border-collapse:collapse;margin:6pt 0;'+
+        'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+        colgroup(pct)+
+        th(cabs.concat(['Respuesta de la técnica']),pct)+filas.join('')+
+      '</table>'+
+      '<p style="margin:6pt 0 15pt;font-size:10pt">'+
+        '<strong style="color:#1A3557">Qué revisar en KACTUS:</strong> '+quehacer+'</p>';
+  }
+
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8">'+
+    '<style>'+
+    /* Carta 21,59 × 27,94 cm con márgenes de 2 cm arriba y abajo y 1,5 cm a
+       los lados. Todas las tablas miden exactamente el ancho útil (18,59 cm),
+       de modo que sus bordes caen sobre el mismo margen que el texto. */
+    '@page WordSection1{size:21.59cm 27.94cm;margin:2cm 1.5cm 2cm 1.5cm;'+
+      'mso-header-margin:1cm;mso-footer-margin:1.25cm;mso-paper-source:0}'+
+    'div.WordSection1{page:WordSection1}'+
+    'body{font-family:Arial,sans-serif;font-size:11pt;color:#1C1C1E;'+
+      'text-align:justify;line-height:1.3;margin:0}'+
+    'h1{font-family:Arial,sans-serif;color:#1A3557;font-size:12pt;font-weight:bold;'+
+      'border-bottom:1.25pt solid #C45B2E;padding-bottom:3pt;'+
+      'margin:16pt 0 7pt;text-align:left}'+
+    'table{border-collapse:collapse;font-size:9.5pt;'+
+      'font-family:Arial,sans-serif;table-layout:fixed;width:18.59cm}'+
+    'td,th{text-align:left;vertical-align:top;word-wrap:break-word;'+
+      'font-family:Arial,sans-serif}'+
+    'p{margin:5pt 0;text-align:justify;font-family:Arial,sans-serif}'+
+    '.nota{font-size:8.5pt;color:#5A6472}'+
+    '.caja{border:0.75pt solid #C6CEDA;background:#F4F6FA;'+
+      'padding:7pt 10pt;margin:7pt 0}'+
+    '</style></head><body><div class="WordSection1">'+
+    '<p style="text-align:center;margin:0 0 7pt">'+
+      '<img src="'+LOGO_FULL_B64+'" style="width:6.2cm;height:auto" alt="Eduardo Acero — Contador Público"></p>'+
+    '<p style="text-align:center;font-size:12.5pt;font-weight:bold;color:#1A3557;'+
+      'margin:0;letter-spacing:0.4pt">GOBERNACIÓN DE CASANARE</p>'+
+    '<p style="text-align:center;color:#5A6472;font-size:10pt;margin:2pt 0 13pt">'+
+      'NIT 892.099.216 · Dirección de Talento Humano</p>'+
+    '<p style="text-align:center;font-size:15pt;font-weight:bold;color:#1A3557;margin:0">'+
+      'RELACIÓN DE CASOS PARA REVISIÓN</p>'+
+    '<p style="text-align:center;font-size:11pt;color:#2563A8;margin:4pt 0 3pt">'+
+      'Nómina de '+esc(regTxt)+' — '+perStr+'</p>'+
+    '<table align="center" style="border-collapse:collapse;margin:7pt auto 12pt;'+
+      'width:6cm;table-layout:fixed"><tr>'+
+      '<td style="border:0;border-top:1.25pt solid #C45B2E;padding:0;'+
+      'font-size:1pt;line-height:1pt">&nbsp;</td></tr></table>'+
+    (function(){
+      var f=['21%','79%'];
+      function fila(et,va,alt){
+        return '<tr>'+
+          '<td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;background:#F4F6FA;'+
+            'font-size:9.5pt;vertical-align:top"><strong>'+et+'</strong></td>'+
+          '<td style="border:0.75pt solid #C6CEDA;padding:4pt 6pt;font-size:9.5pt;'+
+            'vertical-align:top;background:'+(alt?'#FBFCFE':'#FFFFFF')+'">'+va+'</td></tr>';
+      }
+      return '<table width="100%" style="border-collapse:collapse;margin:0 0 11pt;'+
+        'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+colgroup(f)+
+        fila('Dirigido a','Técnico Administrativo responsable de la liquidación de la '+
+          'nómina en KACTUS')+
+        fila('Remite',esc(I.nombre||'')+
+          (I.contrato?' · Contrato de prestación de servicios '+esc(I.contrato):''),1)+
+        fila('Fecha',new Date().toLocaleDateString('es-CO',
+          {year:'numeric',month:'long',day:'numeric'}))+
+        fila('Alcance',rows.length+' servidores de la prenómina del período · '+
+          'Devengado '+cop(C.tot.devArch),1)+
+      '</table>';
+    })()+
+
+    '<p style="background:#FAF7F3;border-left:3pt solid #C45B2E;padding:8pt 11pt;'+
+      'margin:8pt 0;font-size:10pt">'+
+      '<strong>Cómo se usa este documento.</strong> No es una calificación del trabajo ni un '+
+      'informe de hallazgos: es la relación de los casos que quedaron por aclarar, agrupados '+
+      'por tema para poder revisarlos en tandas. Cada caso dice qué liquidó el sistema, qué '+
+      'arroja el cálculo normativo y en qué norma se sustenta. <strong>La última columna de '+
+      'cada tabla está en blanco a propósito</strong>: es para que usted anote si corrigió, si '+
+      'el caso no procede, o qué explica la diferencia. Varias de estas diferencias no son '+
+      'errores de liquidación sino parametrización del sistema o datos desactualizados en '+
+      'otra fuente, y eso solo se aclara con quien liquida.</p>'+
+
+    '<h1>Resumen</h1>'+
+    '<table width="100%" style="border-collapse:collapse;margin:6pt 0;'+
+      'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+      colgroup(['46%','10%','44%'])+
+      th(['Tema','Casos','Qué se contrastó'],['46%','10%','44%'])+
+      [['Seguridad social (IBC)',B.ibc.length,'Conceptos del Prototipo 101 y Decreto 1158 de 1994'],
+       ['Retención en la fuente',B.ret.length,'Depuración del artículo 388 y tabla del 383 del E.T.'],
+       ['Bonificación por servicios',B.bsp.length,'Aniversario de vinculación, Decreto 1042 de 1978'],
+       ['Asignación básica y gastos de representación',B.asig.length,'Caracterización de planta de la DTH'],
+       ['Clase de riesgo de ARL',B.arl.length,'Planilla del operador y Decreto 1072 de 2015'],
+       ['Conciliación con la planilla',B.pila.length,'Planilla Resumen del período'],
+       ['Descuentos sobre el tope legal',B.desc.length,'Artículos 155 y 156 del C.S.T. y Ley 1527 de 2012'],
+       ['Novedades sin IBC del mes anterior',B.nov.length,'Artículo 1 del Decreto 1406 de 1999'],
+       ['Servidores que pasaron a tener retención',B.umbral.length,
+        datosParaTecnica.umbralEtiqueta?('Umbral de 95 UVT del artículo 383 del E.T. '+
+          'frente a '+datosParaTecnica.umbralEtiqueta):'Requiere un mes archivado'],
+       ['Variación de retención sin explicar',B.hret.length,
+        datosParaTecnica.hrEtiqueta?('Retención de '+datosParaTecnica.hrEtiqueta+
+          ' y conceptos del Prototipo 102'):'Requiere un mes archivado']
+      ].map(function(k,i){
+        return tr([k[0],'<div style="text-align:center">'+(k[1]||'—')+'</div>',k[2]],
+          k[1]?(i%2?'#fff':'#F7F9FC'):'#F0F4F0');
+      }).join('')+
+      tr(['<strong>TOTAL DE CASOS</strong>',
+          '<div style="text-align:center"><strong>'+D.total+'</strong></div>',
+          'Sobre '+rows.length+' servidores revisados'],'#E8EEF6')+
+    '</table>'+
+    (D.total===0?'<p><strong>No quedaron casos por aclarar en este período.</strong></p>':'');
+
+  /* Si la lectura del archivo tiene problemas, las cifras por servidor no son
+     confiables y mandarlas a revisar haría perder el tiempo. Se advierte
+     arriba, con nombre propio, en lugar de impedir el documento: quien liquida
+     suele ser quien puede explicar o rehacer la exportación. */
+  /* La planilla declara su propio periodo. Cruzarla contra una nomina de otro
+     mes produce diferencias que no existen, de modo que conviene decirlo antes
+     de que alguien se ponga a perseguirlas. */
+  if(S.pilaPeriodo&&per.mes&&
+     (S.pilaPeriodo.mes!==per.mes||S.pilaPeriodo.anio!==per.anio)){
+    html+='<p style="border:0.75pt solid #B45309;background:#FFFBEB;padding:8pt 11pt;'+
+      'margin:10pt 0;font-size:10pt">'+
+      '<strong style="color:#B45309">La planilla no es del mismo mes.</strong> '+
+      'La prenómina es de '+perStr+' y la planilla cargada declara el período '+
+      MESES[S.pilaPeriodo.mes]+' de '+S.pilaPeriodo.anio+'. Las diferencias del numeral de '+
+      'conciliación y las clases de riesgo de ARL salen de ese cruce, así que tómelas con '+
+      'reserva hasta cargar la planilla que corresponde.</p>';
+  }
+
+  var bloq=verificarEntrega().filter(function(v){ return v.nivel==='BLOQUEA'; });
+  if(bloq.length){
+    html+='<p style="border:0.75pt solid #B91C1C;background:#FEF2F2;padding:8pt 11pt;'+
+      'margin:10pt 0;font-size:10pt">'+
+      '<strong style="color:#B91C1C">Antes de trabajar esta relación.</strong> '+
+      'La lectura del archivo tiene '+bloq.length+' problema(s) que afectan la confiabilidad '+
+      'de las cifras por servidor:</p>'+
+      '<table width="100%" style="border-collapse:collapse;margin:0 0 10pt;'+
+        'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+colgroup(['100%'])+
+      bloq.map(function(v,i){
+        return tr(['<strong style="color:#1A3557">'+esc(v.control)+'</strong><br>'+
+          '<span style="font-size:8.5pt;color:#5A6472">'+esc(v.detalle)+'</span>'],i%2?'#FFFFFF':'#FDF8F8');
+      }).join('')+'</table>'+
+      '<p style="font-size:10pt">Conviene resolverlos antes de revisar caso por caso.</p>';
+  }
+
+  var k=0;
+
+  /* 1 · IBC */
+  html+=bloque(++k,'Seguridad social — base de cotización',
+    'El IBC se arma con los conceptos de la prenómina que pertenecen al Prototipo 101, '+
+    'conforme al artículo 1 del Decreto 1158 de 1994. En los servidores con novedad, los días '+
+    'de la novedad cotizan sobre el IBC del mes inmediatamente anterior y los días laborados '+
+    'sobre los conceptos del período (Decreto 1406 de 1999, artículo 1).'+
+    (D.omit.ibc?' Se relacionan las diferencias superiores a '+cop(D.umbral)+'; otras '+
+      D.omit.ibc+' quedaron por debajo de ese monto y corresponden al redondeo de la '+
+      'liquidación.':''),
+    ['Servidor','IBC','Descuento','Norma','Diferencia'],
+    ['31%','13%','13%','13%','14%'],
+    B.ibc.map(function(x,i){
+      return trR([
+        quien(x.ced,x.nom,x.nov!=='NORMAL'?(x.nov+
+          (/anterior/i.test(x.regla)?' · sin IBC anterior':
+           (/Mixta/i.test(x.regla)?' · base mixta':''))):''),
+        mn(cop(x.ibc)),mn(cop(x.sistema)),mn(cop(x.norma)),
+        mn('<strong>'+cop(x.dif)+'</strong>')],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'Conceptos 500, 501 y 502 contra el IBC del Prototipo 101. «Descontado» es la suma de '+
+    'esos tres conceptos. Si el servidor tiene novedad, verifique que el sistema haya tomado '+
+    'el IBC del mes anterior solo por los días de la novedad y no por el mes completo; bajo '+
+    'el nombre aparece la regla que se aplicó.');
+
+  /* 2 · Retención. Los casos se agrupan por situación: dentro de un grupo la
+     causa es la misma, de modo que repetir la explicación fila por fila
+     llenaría páginas de texto idéntico y haría ilegible la tabla. */
+  if(B.ret.length){
+    var gr={}, ordenG=[];
+    B.ret.forEach(function(x){
+      if(!gr[x.cod]){ gr[x.cod]={etiq:x.etiq, nota:x.nota, casos:[]}; ordenG.push(x.cod); }
+      gr[x.cod].casos.push(x);
+    });
+    ordenG.sort(function(a,b){ return gr[b].casos.length-gr[a].casos.length; });
+    html+='<h1>'+(++k)+'. Retención en la fuente '+
+      '<span style="font-weight:normal;font-size:10.5pt;color:#5A6472">('+
+      B.ret.length+' caso'+(B.ret.length===1?'':'s')+' en '+ordenG.length+
+      ' situación'+(ordenG.length===1?'':'es')+')</span></h1>'+
+      '<p style="background:#F4F6FA;border-left:2.5pt solid #2563A8;padding:7pt 10pt;'+
+      'margin:6pt 0;font-size:10pt">Se reconstruyó la depuración del artículo 388 del '+
+      'Estatuto Tributario sobre la base del Prototipo 102, con la tabla del artículo 383, '+
+      'el límite de renta exenta de 790 UVT anuales (artículo 206 numeral 10) y la '+
+      'aproximación del artículo 577.'+
+      (D.omit.ret?' Se relacionan las diferencias superiores a '+cop(D.umbral)+'; otras '+
+        D.omit.ret+' quedaron por debajo de ese monto.':'')+
+      ' Los casos van agrupados por situación, porque dentro de cada grupo la causa es la '+
+      'misma y se corrige de una sola manera.</p>';
+    ordenG.forEach(function(cod,gi){
+      var G=gr[cod], sub=G.casos.reduce(function(a,x){return a+x.dif;},0);
+      var anc=['34%','13%','13%','13%','13%','14%'];
+      html+='<p style="margin:13pt 0 3pt;font-size:10.5pt">'+
+        '<strong style="color:#1A3557">'+k+'.'+(gi+1)+'  '+esc(G.etiq)+'</strong>'+
+        '<span style="color:#5A6472;font-size:10pt"> — '+G.casos.length+' servidor'+
+        (G.casos.length===1?'':'es')+', '+cop(sub)+' en total</span></p>'+
+        /* La nota viene del primer caso y cita SU monto. Como aquí encabeza a
+           todo el grupo, ese monto se reemplaza por el total del grupo: de
+           otro modo el texto diría una cifra que no corresponde a la tabla. */
+        '<p style="margin:0 0 5pt;font-size:9.5pt;color:#3B4452">'+
+          esc(String(G.nota).split(cop(G.casos[0].dif)).join(cop(sub)))+'</p>'+
+        '<table width="100%" style="border-collapse:collapse;margin:4pt 0 9pt;'+
+          'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+        colgroup(anc)+
+        th(['Servidor','Base gravable','Retenido','Norma','Diferencia',
+            'Respuesta de la técnica'],anc)+
+        G.casos.map(function(x,i){
+          return trR([quien(x.ced,x.nom),mn(cop(x.base)),mn(cop(x.sistema)),
+            mn(cop(x.norma)),mn('<strong>'+cop(x.dif)+'</strong>')],
+            i%2?'#FFFFFF':'#F7F9FC');
+        }).join('')+
+        '</table>';
+    });
+    html+='<p style="margin:6pt 0 15pt;font-size:10pt">'+
+      '<strong style="color:#1A3557">Qué revisar en KACTUS:</strong> '+
+      'Concepto 513 y la parametrización del Prototipo 102. Revise que el porcentaje fijo '+
+      'del Procedimiento 2 corresponda al calculado en diciembre sobre los doce meses '+
+      'anteriores, y que la renta exenta del 25 % tenga aplicado el tope de 790 UVT al '+
+      'año.</p>';
+  }
+
+  /* 3 · BSP */
+  html+=bloque(++k,'Bonificación por servicios prestados',
+    'La bonificación se causa cada vez que el servidor cumple un año continuo de servicio '+
+    '(Decreto 1042 de 1978, artículo 45), de modo que el mes en que se liquida depende de la '+
+    'fecha de vinculación y de las interrupciones del servicio, no del calendario.',
+    ['Servidor','Situación','Ingreso','Años','Pagado','Esperado'],
+    ['28%','16%','12%','6%','13%','13%'],
+    B.bsp.map(function(x,i){
+      return trR([quien(x.ced,x.nom),esc(x.tipo),mn(esc(x.ingreso)),
+        mn(String(x.anios)),mn(cop(x.pagado)),
+        mn(x.esperado?cop(x.esperado):'—')],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'Concepto 114 y la fecha de vinculación registrada. Si hubo licencia no remunerada o '+
+    'suspensión, el aniversario se corre tantos días como haya durado la interrupción.');
+
+  /* 4 · Asignación básica */
+  html+=bloque(++k,'Asignación básica y gastos de representación',
+    'Se contrastó el concepto 101 contra la asignación registrada en la caracterización de '+
+    'planta, y el concepto 102 contra los gastos de representación. Ambos son factor de '+
+    'salario (Decreto 1042 de 1978, artículo 42). <strong>Antes de tocar nada, verifique que '+
+    'las dos fuentes sean del mismo corte</strong>: un ascenso, un encargo o el decreto anual '+
+    'de salarios explican diferencias que no son errores de liquidación.',
+    ['Servidor','Nómina','Planta','Diferencia','%'],
+    ['36%','13%','13%','13%','8%'],
+    B.asig.map(function(x,i){
+      return trR([
+        quien(x.ced,x.nom,esc(x.cargo)+(x.grado?' · grado '+esc(x.grado):'')+
+          (x.soloGR?' · gastos de representación (102)':'')),
+        mn(x.soloGR?cop(x.gr):cop(x.sistema)),
+        mn(x.soloGR?cop(x.grPlanta):cop(x.planta)),
+        mn('<strong>'+cop(x.soloGR?x.difGR:x.dif)+'</strong>'),
+        mn(x.soloGR?'—':x.pct.toFixed(1)+'%')],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'Conceptos 101 y 102 contra el acto administrativo de nombramiento o de encargo. Si el '+
+    'acto es posterior a la caracterización, lo que hay que actualizar es el libro de planta, '+
+    'no la nómina.');
+
+  /* 5 · ARL */
+  html+=bloque(++k,'Clase de riesgo para ARL',
+    'La tarifa de riesgos laborales la fija el centro de trabajo según la actividad allí '+
+    'desarrollada (Decreto 1072 de 2015, artículo 2.2.4.3.5), no la entidad como un todo. A '+
+    'los servidores de esta lista no se les pudo identificar la clase, de modo que el aporte '+
+    'calculado para ellos usa la tarifa general y no es confiable.',
+    ['Servidor','IBC','Tarifa aplicada','Aporte calculado'],
+    ['38%','16%','15%','16%'],
+    B.arl.map(function(x,i){
+      return trR([quien(x.ced,x.nom),mn(cop(x.ibc)),
+        mn((x.aplicada*100).toFixed(3)+' %'),mn(cop(x.aporte))],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'El centro de trabajo al que está adscrito cada uno y la clase de riesgo que le '+
+    'corresponde. La planilla del operador la trae por afiliado.');
+
+  /* 6 · PILA */
+  html+=bloque(++k,'Conciliación con la planilla del operador',
+    'Se cruzó registro por registro la prenómina contra la Planilla Resumen del período. La '+
+    'planilla liquida el aporte total de cada subsistema —salud al 12,5 % y pensión al 16 % '+
+    'más el Fondo de Solidaridad Pensional—, no el descuento al servidor.',
+    ['Servidor','Rengl.','Diferencias encontradas'],
+    ['30%','8%','47%'],
+    B.pila.map(function(x,i){
+      return trR([quien(x.ced,x.nom),mn(String(x.rengl||'—')),
+        esc(x.difs)],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'Que los días reportados en la planilla coincidan con los liquidados, y que las novedades '+
+    'de ingreso, retiro, vacaciones e incapacidad estén reportadas con la misma fecha del '+
+    'acto administrativo.');
+
+  /* 7 · Descuentos */
+  html+=bloque(++k,'Descuentos por encima del tope legal',
+    'El embargo por alimentos no puede superar el 50 % del devengado (C.S.T., artículo 156); '+
+    'el embargo civil opera sobre la quinta parte del excedente del salario mínimo (artículo '+
+    '155); y los descuentos por libranza no pueden dejar al servidor con menos del 50 % de su '+
+    'neto (Ley 1527 de 2012, artículo 3).',
+    ['Servidor','Neto legal','Situación'],
+    ['30%','15%','40%'],
+    B.desc.map(function(x,i){
+      return trR([quien(x.ced,x.nom),mn(cop(x.neto)),
+        esc(x.q)],i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'El orden de prelación de los descuentos y los que deban suspenderse en el mes. Si hay '+
+    'libranzas y embargo concurrentes, el embargo judicial tiene prelación.');
+
+  /* 8 · Novedades sin IBC anterior */
+  html+=bloque(++k,'Novedades sin IBC del mes anterior',
+    'En vacaciones, incapacidades y licencias remuneradas, los días de la novedad cotizan '+
+    'sobre el IBC del mes inmediatamente anterior (Decreto 1406 de 1999, artículo 1). Sin ese '+
+    'dato no se puede verificar la cotización de estos servidores.',
+    ['Servidor','Novedad','Días'],
+    ['44%','24%','14%'],
+    B.nov.map(function(x,i){
+      return trR([quien(x.ced,x.nom),esc(x.nov),mn(String(x.dias||'—'))],
+        i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'El IBC con que cotizaron estos servidores el mes anterior, para confirmarlo contra la '+
+    'planilla de ese período.');
+
+  /* 9 · Variación de retención sin explicación */
+  html+=bloque(++k,'Variación de retención sin explicar',
+    'Se contrastó la retención de cada servidor contra la de '+
+    esc(datosParaTecnica.hrEtiqueta||'el mes anterior')+' y se atribuyó la diferencia a los '+
+    'conceptos del Prototipo 102 que cambiaron. Aquí van <strong>solo los casos que no '+
+    'cuadran</strong>: aquellos en que la base varió y la retención no se movió, o al revés. '+
+    'Una retención que sube porque entró una bonificación o una prima es lo que debía pasar '+
+    'y no se relaciona'+
+    (datosParaTecnica.hrExplicados?' ('+datosParaTecnica.hrExplicados+
+      ' servidor(es) quedaron en ese caso)':'')+'.',
+    ['Servidor','Retenido antes','Retenido ahora','Base antes','Base ahora'],
+    ['31%','13%','13%','13%','13%'],
+    B.hret.map(function(x,i){
+      return trR([
+        quien(x.ced,x.nom,esc(x.clase)+' · Proc. '+esc(x.proc))+
+        '<br><span style="'+GRIS+'">'+esc(x.nota)+'</span>',
+        mn(cop(x.retAnt)),mn('<strong>'+cop(x.retAct)+'</strong>'),
+        mn(cop(x.baseAnt)),mn('<strong>'+cop(x.baseAct)+'</strong>')],
+        i%2?'#FFFFFF':'#F7F9FC');
+    }),
+    'El concepto 513 contra la base del Prototipo 102 de los dos meses. Si la base subió y '+
+    'la retención no, revise si el servidor quedó marcado como no declarante o si el '+
+    'concepto que entró está fuera del prototipo; si la retención se movió sola, revise el '+
+    'porcentaje fijo del Procedimiento 2 y las deducciones del artículo 387.');
+
+  /* 10 · Cruce del umbral de las 95 UVT */
+  if(B.umbral.length){
+    var anc=['36%','16%','16%','18%'];
+    html+='<h1>'+(++k)+'. Servidores que pasaron a tener retención '+
+      '<span style="font-weight:normal;font-size:10.5pt;color:#5A6472">('+
+      B.umbral.length+' caso'+(B.umbral.length===1?'':'s')+')</span></h1>'+
+      '<p style="background:#F4F6FA;border-left:2.5pt solid #2563A8;padding:7pt 10pt;'+
+      'margin:6pt 0;font-size:10pt">La retención del Procedimiento 1 se calcula sobre el '+
+      'ingreso <strong>del mes</strong>, no sobre la asignación básica. La tabla del '+
+      'artículo 383 del Estatuto Tributario solo aplica cuando la base gravable del mes '+
+      'pasa de <strong>95 UVT</strong> —'+cop(95*S.P.uvt)+' en esta vigencia—, de modo '+
+      'que a un servidor que nunca había tenido retención se le retiene el mes en que le '+
+      'entra una bonificación, una prima o unas vacaciones. No es un error de '+
+      'liquidación, pero suele generar inconformidad, y conviene tener la sustentación '+
+      'lista antes de que llegue la consulta.</p>';
+    B.umbral.forEach(function(j,gi){
+      html+='<p style="margin:12pt 0 3pt;font-size:10.5pt">'+
+        '<strong style="color:#1A3557">'+k+'.'+(gi+1)+'  '+esc(j.nombre)+'</strong>'+
+        '<span style="color:#5A6472;font-size:10pt"> — C.C. '+esc(j.cedula)+
+        (j.nov!=='NORMAL'?' · '+esc(j.nov):'')+
+        (j.caso==='pendiente'?' · <strong style="color:#B45309">corresponde retener y la '+
+          'nómina no lo liquidó</strong>':'')+'</span></p>'+
+        '<p style="margin:0 0 5pt;font-size:9.5pt;color:#3B4452">'+
+        (j.porExtra
+          ? 'Recibió '+cop(j.sumaExtra)+' adicionales a su asignación ordinaria por '+
+            enumera(j.extra.map(function(x){
+              return esc(x.nom).toLowerCase()+' ('+cop(x.val)+')'; }))+
+            '. Sin esos pagos la base habría quedado en '+
+            dec2(j.uvtSinExtra)+' UVT, sin retención; con ellos llegó a '+
+            dec2(j.uvtBase)+' UVT.'
+          : 'La asignación ordinaria por sí sola supera el umbral: la base del mes quedó '+
+            'en '+dec2(j.uvtBase)+' UVT.')+'</p>'+
+        '<table width="100%" style="border-collapse:collapse;margin:4pt 0 9pt;'+
+          'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+
+        colgroup(anc.concat(['14%']))+
+        th(['Depuración','Valor','En UVT','Tramo del Art. 383',
+            'Respuesta de la técnica'],anc.concat(['14%']))+
+        trR(['Base del Prototipo 102',mn(cop(j.baseP102)),mn('—'),
+             mn('—')],'#FFFFFF')+
+        trR(['Menos aportes obligatorios (500, 501, 502)',mn('−'+cop(j.aportes)),
+             mn('—'),mn('—')],'#F7F9FC')+
+        trR(['Menos renta exenta del 25 % (Art. 206-10)'+
+             (j.topeOpero?'<br><span style="'+GRIS+'">Limitada al tope mensual de '+
+               cop(j.topeRE)+'</span>':''),
+             mn('−'+cop(j.reAplicada)),mn('—'),mn('—')],'#FFFFFF')+
+        trR(['<strong>Base gravable del mes</strong>',
+             mn('<strong>'+cop(j.baseGravable)+'</strong>'),
+             mn('<strong>'+dec2(j.uvtBase)+'</strong>'),
+             mn('—')],'#F7F9FC')+
+        trR(['Umbral del artículo 383',mn(cop(j.umbral)),mn('95,00'),
+             mn('0 %')],'#FFFFFF')+
+        trR(['<strong>Retención que corresponde</strong>'+
+             (j.retencion!==j.retNormativa
+               ? '<br><span style="'+GRIS+'">Liquidado por el sistema: '+
+                 cop(j.retencion)+'</span>':''),
+             mn('<strong>'+cop(j.retNormativa)+'</strong>'),mn('—'),
+             mn(esc(j.tramo.txt))],'#F7F9FC')+
+        '</table>';
+    });
+    html+='<p style="margin:6pt 0 15pt;font-size:10pt">'+
+      '<strong style="color:#1A3557">Qué revisar en KACTUS:</strong> '+
+      'Que el concepto 513 corresponda al tramo de la tabla según la base del mes, y que '+
+      'la renta exenta del 25 % tenga aplicado el tope de 790 UVT anuales. Si el servidor '+
+      'consulta, la Dirección puede sustentarlo con el detalle de esta tabla: lo retenido '+
+      'no se pierde, se descuenta del impuesto a cargo en su declaración de renta.</p>';
+  }
+
+  /* Lo que quedó conforme */
+  var conf=[];
+  if(!B.ibc.length)  conf.push('El IBC de seguridad social coincide con el cálculo normativo en los '+rows.length+' servidores.');
+  if(!B.ret.length)  conf.push('La retención en la fuente reproduce la depuración del artículo 388 del E.T. en todos los casos.');
+  if(!B.bsp.length&&S.planta&&Object.keys(S.planta).length) conf.push('La bonificación por servicios está liquidada en los aniversarios que corresponden.');
+  if(!B.asig.length&&S.planta&&Object.keys(S.planta).length) conf.push('La asignación básica coincide con la caracterización de planta.');
+  if(!B.arl.length)  conf.push('Todos los servidores tienen identificada su clase de riesgo de ARL.');
+  if(!B.pila.length&&S.pilaDet&&S.pilaDet.length) conf.push('La conciliación contra la planilla del operador no arroja diferencias.');
+  if(!B.desc.length) conf.push('Ningún descuento supera los topes de los artículos 155 y 156 del C.S.T. ni el de la Ley 1527 de 2012.');
+  if(!B.umbral.length&&datosParaTecnica.umbralEtiqueta) conf.push('Ningún servidor pasó '+
+    'de no tener retención en '+datosParaTecnica.umbralEtiqueta+' a tenerla en este '+
+    'período.');
+  if(!B.hret.length&&datosParaTecnica.hrEtiqueta) conf.push('Toda variación de retención '+
+    'frente a '+datosParaTecnica.hrEtiqueta+' queda explicada por los conceptos del período.');
+  if(conf.length){
+    html+='<h1>'+(++k)+'. Lo que quedó conforme</h1>'+
+      '<p style="font-size:10pt">Esto se verificó y no requiere revisión, '+
+        'para no repetir trabajo:</p>'+
+      '<table width="100%" style="border-collapse:collapse;margin:6pt 0;'+
+        'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+colgroup(['100%'])+
+      conf.map(function(x,i){
+        return tr(['<span style="color:#0E7A52;font-weight:bold">&#10003;</span>&nbsp;&nbsp;'+x],
+          i%2?'#FFFFFF':'#F7F9FC');
+      }).join('')+'</table>';
+  }
+
+  html+='<h1>'+(++k)+'. Devolución</h1>'+
+    '<p style="font-size:10pt">Agradezco devolver este documento con la última columna '+
+    'diligenciada. Donde la diferencia obedezca a la parametrización del sistema, basta con '+
+    'indicarlo: ese punto se tramita con el proveedor y no con quien liquida.</p>'+
+    '<table width="100%" style="border-collapse:collapse;margin:26pt 0 0;'+
+      'table-layout:fixed;width:'+ANCHO.toFixed(2)+'cm">'+colgroup(['47%','6%','47%'])+
+      '<tr>'+
+        '<td style="border:0;border-top:0.75pt solid #1A3557;padding:5pt 0;'+
+          'text-align:center;font-size:10pt">Elaboró y revisó<br>'+
+          '<strong style="color:#1A3557">'+esc(I.nombre||'')+'</strong><br>'+
+          '<span style="font-size:8.5pt;color:#5A6472">'+
+          (I.contrato?'Contrato de prestación de servicios '+esc(I.contrato):'')+
+          '</span></td>'+
+        '<td style="border:0">&nbsp;</td>'+
+        '<td style="border:0;border-top:0.75pt solid #1A3557;padding:5pt 0;'+
+          'text-align:center;font-size:10pt">Recibió<br>'+
+          '<strong style="color:#1A3557">&nbsp;</strong><br>'+
+          '<span style="font-size:8.5pt;color:#5A6472">Técnico Administrativo — liquidación de nómina</span></td>'+
+      '</tr>'+
+    '</table>'+
+    '<p style="margin-top:16pt;font-size:8.5pt;color:#5A6472;text-align:left">'+
+      'Documento de trabajo interno de la Dirección de Talento Humano. Las cifras provienen de '+
+      'la prenómina de '+perStr+' procesada en KACTUS'+
+      (S.pilaArchivo?', de la planilla '+esc(S.pilaArchivo):'')+
+      (S.plantaArchivo?' y de la caracterización de planta '+esc(S.plantaArchivo):'')+'.</p>'+
+    '</div></body></html>';
+
+  var blob=new Blob(['\ufeff'+html],{type:'application/msword;charset=utf-8'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='RELACION_CASOS_TECNICA_'+(MESES[per.mes]||'MES').toUpperCase()+'_'+
+    per.anio+'_'+(S.regimen==='oficial'?'OFICIALES':'PUBLICOS')+'.doc';
+  a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+}
+
 function exportInformeWord(){
   if(!S.computed){alert('Cargue una prenómina primero.');return;}
   var C=S.computed,P=S.P,rows=C.rows;
@@ -3002,12 +4392,19 @@ function exportInformeWord(){
     (I.observGeneral?'<p style="background:#FAF7F3;border-left:3px solid #C45B2E;padding:10px 14px;margin:12px 0"><strong>Observación del auditor:</strong> '+esc(I.observGeneral)+'</p>':'')+
     '<table width="100%"><colgroup><col style="width:32%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:23%"></colgroup>'+
       th(['Módulo','Empleados','Conformes','Por revisar','Calificación'])+
-      tr(['Integridad de datos',rows.length,rows.length,'0','95/100'],'#F2F5FA')+
-      tr(['Seguridad Social (IBC)',rows.length,ss.ok,ss.menos+ss.mas,'72/100'])+
-      tr(['Parafiscales',rows.length,'N/D','—','80/100'],'#F2F5FA')+
+      /* Las notas salen de los módulos calculados, no de valores fijos: antes
+         Integridad, Parafiscales y Prestaciones estaban escritas a mano y no
+         se movían de un mes a otro aunque los datos cambiaran. */
+      tr(['Integridad de datos',rows.length,
+          rows.length-(((S.data&&S.data.descuadres)||[]).length),
+          ((S.data&&S.data.descuadres)||[]).length,CALIF[0].n+'/100'],'#F2F5FA')+
+      tr(['Seguridad Social (IBC)',rows.length,ss.ok,ss.menos+ss.mas,CALIF[1].n+'/100'])+
+      tr(['Parafiscales',rows.length,
+          (S.pilaDet&&S.pilaDet.length)?'Conciliado':'Sin planilla','—',
+          CALIF[2].n+'/100'],'#F2F5FA')+
       tr(['Retención en la fuente',rows.length,ret.p1+ret.p2,ret.rev,CALIF[3].n+'/100'])+
-      tr(['Prestaciones sociales',rows.length,'—','—','70/100'],'#F2F5FA')+
-      tr(['Trazabilidad y control',rows.length,rows.length,'0','90/100'])+
+      tr(['Prestaciones sociales',rows.length,'—','—',CALIF[4].n+'/100'],'#F2F5FA')+
+      tr(['Trazabilidad y control',rows.length,rows.length,'0',CALIF[5].n+'/100'])+
       '<tr><td colspan="4" style="border:1pt solid #000;padding:6px 8px;font-weight:bold;background:#1A3557;color:#fff">CALIFICACIÓN PONDERADA TOTAL</td>'+
       '<td style="border:1pt solid #000;padding:6px 8px;font-weight:bold;background:'+niv[1]+';color:#fff;font-size:12pt">'+pond.toFixed(1)+'/100 — '+niv[0]+'</td></tr>'+
     '</table>'+
@@ -4222,9 +5619,14 @@ function exportXlsx(){
         '=IF(N(O'+L+')=0,"",N'+L+'-O'+L+')',
         '='+RN+'AQ'+f, plv(r.cedula,'aporCcf'),
         '=IF(N(R'+L+')=0,"",Q'+L+'-R'+L+')',
-        '=IF(AND(OR(G'+L+'="",ABS(G'+L+')<='+PA+'$B$50),'+
-             'OR(J'+L+'="",ABS(J'+L+')<='+PA+'$B$50),'+
-             'OR(M'+L+'="",ABS(M'+L+')<='+PA+'$B$50)),"✓ OK","✗ REVISAR")'
+        /* Se usa IF y no OR: OR evalúa sus dos argumentos, de modo que
+           ABS("") reventaba con #¡VALOR! en los servidores que no están en
+           la planilla. IF solo evalúa la rama que toma. */
+        '=IF(AND(IF(ISNUMBER(G'+L+'),ABS(G'+L+')<='+PA+'$B$50,TRUE),'+
+                'IF(ISNUMBER(J'+L+'),ABS(J'+L+')<='+PA+'$B$50,TRUE),'+
+                'IF(ISNUMBER(M'+L+'),ABS(M'+L+')<='+PA+'$B$50,TRUE)),'+
+          'IF(AND(ISNUMBER(F'+L+'),ISNUMBER(I'+L+')),"✓ OK","— sin planilla"),'+
+          '"✗ REVISAR")'
       ]);
     });
     var ceFin=ce.length;
@@ -4243,6 +5645,106 @@ function exportXlsx(){
       congelar:{xSplit:2,ySplit:ceHdr+1},
       filtro:'A'+(ceHdr+1)+':T'+ceFin
     }), 'CRUCE ESPEJO PILA');
+  }
+
+  /* ═══════════ 6-ter. ASIGNACIÓN BÁSICA vs. CARACTERIZACIÓN ═══════════ */
+  var CA=contrasteAsignacion();
+  if(CA&&CA.filas.length){
+    var ab=[
+      ['ASIGNACIÓN BÁSICA · PRENÓMINA vs. CARACTERIZACIÓN DE PLANTA — '+perStr.toUpperCase()],
+      ['Caracterización: '+(S.plantaArchivo||'(sin nombre)')+
+       ' · tolerancia aplicada '+CA.tol+' (un salario mínimo diario)'],
+      [CA.filas.length+' servidor(es) con diferencia sobre '+(CA.filas.length+CA.conformes)+
+       ' comparados · '+CA.sube+' por encima, '+CA.baja+' por debajo'],
+      ['Compruebe que la prenómina y la caracterización sean del mismo corte: un ascenso,'],
+      ['un encargo o el decreto anual de salarios explican diferencias que no son errores'],
+      ['de liquidación sino desfase de fechas entre los dos documentos.'],
+      [''],
+      ['Cédula','Servidor','Cargo','Grado','Vinculación','Días','Novedad',
+       'Asignación nómina','Asignación planta','Diferencia','%',
+       'G. repr. nómina','G. repr. planta','Dif. g. repr.','Origen del valor','¿Retirado?']
+    ];
+    var abHdr=ab.length-1, abP0=ab.length+1;
+    CA.filas.forEach(function(f,i){
+      var L=ab.length+1;
+      ab.push([f.cedula, f.nombre, f.cargo, f.grado, f.vinculacion,
+        f.dias||'', f.nov,
+        f.nomina, f.planta,
+        '=IF(N(I'+L+')=0,"",H'+L+'-I'+L+')',
+        '=IF(N(I'+L+')=0,"",H'+L+'/I'+L+'-1)',
+        f.gr, f.grPlanta, '=L'+L+'-M'+L+'',
+        f.fuente, f.retirado?'Sí':'']);
+    });
+    var abFin=ab.length;
+    ab.push(['','TOTALES','','','','','',
+      '=SUM(H'+abP0+':H'+abFin+')','=SUM(I'+abP0+':I'+abFin+')',
+      '=SUM(J'+abP0+':J'+abFin+')','',
+      '=SUM(L'+abP0+':L'+abFin+')','=SUM(M'+abP0+':M'+abFin+')',
+      '=SUM(N'+abP0+':N'+abFin+')','','']);
+    XLSX.utils.book_append_sheet(wb, estilizar(hojaConFormulas(ab),{
+      hdr:abHdr, textoEn:[0,1,2,3,4,6,14,15],
+      formato:function(R,C){
+        if(C===5) return FMT.ent;
+        if(C===10) return FMT.pct;
+        return (C>=7&&C<=13)?FMT.pesos:null;
+      },
+      anchos:[12,28,26,8,20,7,13,17,17,15,9,15,15,14,28,10],
+      congelar:{xSplit:2,ySplit:abHdr+1},
+      filtro:'A'+(abHdr+1)+':P'+abFin
+    }), 'ASIGNACIÓN vs PLANTA');
+  }
+
+  /* ═══════════ 6-quater. HISTORIAL DE RETENCIÓN ═══════════
+     Variación contra el mes archivado anterior, atribuida a los conceptos. */
+  var HR=historialRetencion(S.histRetMes||mesAnteriorHist());
+  if(HR&&HR.filas&&HR.filas.length){
+    var hr=[
+      ['HISTORIAL DE RETENCIÓN · '+perStr.toUpperCase()+' CONTRA '+
+       String(HR.etiqueta).toUpperCase()],
+      ['Una retención que sube porque entró una bonificación o una prima es normal. La que'],
+      ['sube sin que la base del Prototipo 102 se mueva, no; y al revés tampoco. Esos dos'],
+      ['casos salen marcados en la columna «Situación».'],
+      [HR.filas.length+' servidor(es) con variación superior a '+cop(HR.tol)+' · '+
+       HR.sinCambio+' sin cambio · '+HR.alertas+' requieren revisión'],
+      [''],
+      ['Cédula','Servidor','Situación','Proc.','Retenido antes','Retenido ahora',
+       'Variación','% var.','Base antes','Base ahora','Δ base',
+       'Conceptos que cambiaron','A qué se debe']
+    ];
+    var hrHdr=hr.length-1, hrP0=hr.length+1;
+    HR.filas.forEach(function(f){
+      var L=hr.length+1;
+      hr.push([f.cedula, f.nombre, f.clase,
+        (f.procAnt===f.procAct?f.procAnt:f.procAnt+' → '+f.procAct),
+        f.retAnt, f.retAct,
+        '=F'+L+'-E'+L,
+        '=IF(N(E'+L+')=0,"",G'+L+'/E'+L+')',
+        f.baseAnt, f.baseAct,
+        '=J'+L+'-I'+L,
+        f.mov.length?f.mov.map(function(m){
+          return m.cod+' '+m.nom+': '+
+            (m.tipo==='nuevo'?'nuevo '+cop(m.act):
+             m.tipo==='dejó de pagarse'?'dejó de pagarse (antes '+cop(m.ant)+')':
+             cop(m.ant)+' → '+cop(m.act))+' ('+cop(m.dif)+')';
+        }).join(' · '):'Ningún concepto del Prototipo 102 cambió',
+        f.nota]);
+    });
+    var hrFin=hr.length;
+    hr.push(['','TOTALES','','',
+      '=SUM(E'+hrP0+':E'+hrFin+')','=SUM(F'+hrP0+':F'+hrFin+')',
+      '=SUM(G'+hrP0+':G'+hrFin+')','',
+      '=SUM(I'+hrP0+':I'+hrFin+')','=SUM(J'+hrP0+':J'+hrFin+')',
+      '=SUM(K'+hrP0+':K'+hrFin+')','','']);
+    XLSX.utils.book_append_sheet(wb, estilizar(hojaConFormulas(hr),{
+      hdr:hrHdr, textoEn:[0,1,2,3,11,12],
+      formato:function(R,C){
+        if(C===7) return FMT.pct;
+        return (C>=4&&C<=10)?FMT.pesos:null;
+      },
+      anchos:[12,26,22,10,15,15,14,8,15,15,14,60,60],
+      congelar:{xSplit:2,ySplit:hrHdr+1},
+      filtro:'A'+(hrHdr+1)+':M'+hrFin
+    }), 'HISTORIAL RETENCIÓN');
   }
 
   /* ═══════════ 7. NOVEDADES DEL PERÍODO ═══════════ */
@@ -4770,6 +6272,61 @@ function alertasResumen(C,n){
   }).join('');
 }
 
+function panelAsignacion(){
+  var A=contrasteAsignacion();
+  if(!A||!A.filas.length) return '';
+  var per=S.computed&&S.computed.periodo;
+  var perTxt=per?(['','enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+    'septiembre','octubre','noviembre','diciembre'][per.mes]+' de '+per.anio):'el período';
+  return '<div class="section" data-foco="asignacion" style="border-left:4px solid #D97706">'+
+    '<h2 style="color:#B45309">Asignación básica · prenómina vs. caracterización de planta</h2>'+
+    '<div class="info-box" style="border-left-color:#D97706">'+
+      '<b>'+A.filas.length+'</b> servidor(es) con diferencia, sobre '+
+      (A.filas.length+A.conformes)+' comparados. '+
+      '<b>'+A.sube+'</b> liquidan por encima de la planta ('+cop(A.montoSube)+') y '+
+      '<b>'+A.baja+'</b> por debajo ('+cop(Math.abs(A.montoBaja))+'); el neto es '+
+      cop(A.neto)+' al mes. Tolerancia aplicada: '+cop(A.tol)+
+      ' —un salario mínimo diario—, para no marcar el redondeo de una liquidación por días.'+
+      (A.sinPlanta?'<br>'+A.sinPlanta+' servidor(es) de la prenómina no están en la planta y '+
+        'no se pudieron comparar.':'')+
+      '<br><br><b>Antes de concluir nada, compruebe que las dos fuentes sean del mismo '+
+      'corte.</b> La prenómina cargada es de '+perTxt+
+      (S.plantaArchivo?' y la caracterización es el archivo <i>'+esc(S.plantaArchivo)+'</i>':'')+
+      '. Un ascenso, un encargo o el decreto anual de salarios explican diferencias que no '+
+      'son errores de liquidación: son desfases de fecha entre los dos documentos.'+
+    '</div>'+
+    '<div class="tbl-wrap"><table class="tbl">'+
+    '<thead><tr><th>Cédula</th><th>Servidor</th><th>Cargo · grado</th><th>Vinculación</th>'+
+    '<th>Días</th><th>Novedad</th>'+
+    '<th>Asignación nómina</th><th>Asignación planta</th><th>Diferencia</th><th>%</th>'+
+    '<th>G. repr. nómina</th><th>G. repr. planta</th><th>Origen del valor</th></tr></thead><tbody>'+
+    A.filas.map(function(f){
+      return '<tr'+(f.retirado?' style="background:#FEF3C7"':'')+'>'+
+        '<td>'+esc(f.cedula)+'</td>'+
+        '<td class="td-nom">'+esc(f.nombre)+(f.retirado?' <span class="h3-note">(retirado)</span>':'')+'</td>'+
+        '<td class="td-nota">'+esc(f.cargo)+(f.grado?' · '+esc(f.grado):'')+'</td>'+
+        '<td class="td-nota">'+esc(f.vinculacion)+'</td>'+
+        '<td class="mn">'+(f.dias||'—')+'</td>'+
+        '<td>'+esc(f.nov)+'</td>'+
+        '<td class="mn">'+cop(f.nomina)+'</td>'+
+        '<td class="mn">'+cop(f.planta)+'</td>'+
+        '<td class="mn '+(f.dif<0?'neg':'')+'">'+(f.difAsig?'<b>'+cop(f.dif)+'</b>':cop(f.dif))+'</td>'+
+        '<td class="mn">'+(f.planta?f.pct.toFixed(1)+'%':'—')+'</td>'+
+        '<td class="mn">'+(f.gr?cop(f.gr):'—')+'</td>'+
+        '<td class="mn">'+(f.grPlanta?cop(f.grPlanta):'—')+'</td>'+
+        '<td class="td-nota">'+esc(f.fuente)+'</td>'+
+      '</tr>';
+    }).join('')+
+    '<tr class="row-total"><td colspan="8"><b>Neto de las diferencias</b></td>'+
+    '<td class="mn"><b>'+cop(A.neto)+'</b></td><td colspan="4"></td></tr>'+
+    '</tbody></table></div>'+
+    '<div class="mini-note">Las filas resaltadas corresponden a servidores que figuran como '+
+    'desvinculados en la caracterización. «Origen del valor» dice de dónde salió la '+
+    'asignación de la nómina: del encabezado del bloque, o del concepto 101 llevado a 30 '+
+    'días cuando el servidor no trabajó el mes completo.</div>'+
+  '</div>';
+}
+
 function vDetalle(){
   var dd=(S.data&&S.data.descuadres)||[];
   var avisoCruce = dd.length ?
@@ -4795,9 +6352,20 @@ function vDetalle(){
           '<td class="mn neg">'+cop(m.q.difDes||0)+'</td></tr>';
       }).join('')+
       '</tbody></table></div>'+
-      '<div class="mini-note">Verifique en el PDF los bloques inmediatamente siguientes a estos '+
-      'servidores: probablemente uno de ellos no fue reconocido.</div>'+
+      '<div class="mini-note">'+
+        (S.data.encabezadosFaltantes?
+          'El PDF trae <b>'+S.data.totalesEnPDF+'</b> líneas TOTAL IDENTIFICACION y se '+
+          'reconocieron <b>'+S.data.employees.length+'</b> servidores: faltan '+
+          S.data.encabezadosFaltantes+' encabezado(s). '+
+          'Verifique en el PDF los bloques inmediatamente siguientes a estos servidores. '+
+          'Si el archivo viene de una impresión o de un recorte, pida la exportación '+
+          'original de KACTUS: ahí los encabezados salen completos.'
+          :'Verifique en el PDF los bloques inmediatamente siguientes a estos servidores: '+
+           'probablemente uno de ellos no fue reconocido.')+
+      '</div>'+
     '</div>' : '';
+
+  var panelAsig=panelAsignacion();
 
   var rows=S.computed.rows.filter(function(r){
     if(S.search){
@@ -4806,7 +6374,7 @@ function vDetalle(){
     }
     return true;
   });
-  return avisoCruce+
+  return avisoCruce+panelAsig+
     '<div class="section">'+
     '<h2>Empleados ('+rows.length+')</h2>'+
     '<div class="toolbar"><input id="inp-search" class="search-in" placeholder="Buscar por nombre o cédula…" value="'+esc(S.search)+'"></div>'+
@@ -4873,6 +6441,241 @@ function vRetencion(){
           '<td class="mn neg">'+cop(cq.difDev||0)+'</td></tr>';
       }).join('')+'</tbody></table></div></div>' : '';
 
+  /* ── Historial de retención contra un mes archivado ───────────────── */
+  var claveHist=S.histRetMes||mesAnteriorHist();
+  var H=claveHist?historialRetencion(claveHist):null;
+  var mesesHist=Object.keys(S.historico||{}).sort().reverse();
+  var panelHist='<div class="section" data-foco="histret">'+
+    '<h2>Historial de retención · variación contra otro mes</h2>'+
+    '<div class="info-box">'+
+      'Contrasta la retención de cada servidor contra la de un mes archivado y atribuye '+
+      'la diferencia a los conceptos que cambiaron. Una retención que sube porque entró '+
+      'una bonificación o una prima es normal; la que sube <b>sin que la base se mueva</b> '+
+      'no lo es, y al revés tampoco. Esos dos casos salen marcados aparte.'+
+    '</div>'+
+    (mesesHist.length?
+      '<div class="tb-row" style="margin-bottom:10px">'+
+        '<label style="font-size:13px;margin-right:8px">Comparar contra:</label>'+
+        '<select id="sel-histret" class="sel-mes">'+
+        mesesHist.map(function(k){
+          return '<option value="'+esc(k)+'"'+(k===claveHist?' selected':'')+'>'+
+            esc(S.historico[k].etiqueta||k)+'</option>';
+        }).join('')+'</select>'+
+      '</div>'
+      :'<p style="font-size:13px">No hay meses archivados todavía. Archive al menos un mes '+
+       'en la pestaña Histórico para poder comparar.</p>')+
+    (!H?'':
+      H.sinMes?'<div class="alerta-inline">El mes seleccionado ya no está en el histórico.</div>':
+      H.sinDetalle?
+        '<div class="alerta-inline">El mes <b>'+esc(H.etiqueta)+'</b> se archivó con una '+
+        'versión anterior de la aplicación, que no guardaba el detalle de retención por '+
+        'servidor. Vuelva a archivar ese PDF en la pestaña Histórico y el historial quedará '+
+        'disponible; los meses que archive de aquí en adelante ya lo traen.</div>'
+      :(function(){
+        var cls={'BASE SIN RETENCIÓN':'#DC2626','RETENCIÓN SIN BASE':'#DC2626',
+                 'VARIACIÓN EXPLICADA':'#0E7A52','SIN CONCEPTOS IDENTIFICADOS':'#D97706'};
+        return '<div class="kpi-row" style="margin-bottom:12px">'+
+          '<div class="kpi"><div class="kpi-l">Retenido en '+esc(H.etiqueta)+'</div>'+
+            '<div class="kpi-v">'+cop(H.tot.retAnt)+'</div></div>'+
+          '<div class="kpi"><div class="kpi-l">Retenido en el período</div>'+
+            '<div class="kpi-v">'+cop(H.tot.retAct)+'</div></div>'+
+          '<div class="kpi"><div class="kpi-l">Variación</div>'+
+            '<div class="kpi-v'+(H.tot.dRet<0?' neg':'')+'">'+cop(H.tot.dRet)+'</div></div>'+
+          '<div class="kpi"><div class="kpi-l">Servidores con variación</div>'+
+            '<div class="kpi-v">'+H.filas.length+'</div></div>'+
+          '<div class="kpi"><div class="kpi-l">Requieren revisión</div>'+
+            '<div class="kpi-v'+(H.alertas?' neg':'')+'">'+H.alertas+'</div></div>'+
+        '</div>'+
+        '<div class="mini-note" style="margin-bottom:10px">'+H.sinCambio+' servidor(es) sin '+
+          'variación por encima de '+cop(H.tol)+
+          (H.nuevos.length?' · '+H.nuevos.length+' no estaban en '+esc(H.etiqueta):'')+
+          (H.salieron.length?' · '+H.salieron.length+' estaban en '+esc(H.etiqueta)+
+            ' y ya no':'')+'.</div>'+
+        (H.filas.length?
+        '<div class="tbl-wrap"><table class="tbl">'+
+        '<thead><tr><th>Cédula</th><th>Servidor</th><th>Situación</th>'+
+        '<th>Retenido '+esc(H.etiqueta)+'</th><th>Retenido ahora</th><th>Variación</th>'+
+        '<th>Base anterior</th><th>Base ahora</th><th>Δ base</th>'+
+        '<th>A qué se debe</th></tr></thead><tbody>'+
+        H.filas.map(function(f){
+          return '<tr'+(/SIN /.test(f.clase)?' class="row-bad"':'')+'>'+
+            '<td>'+esc(f.cedula)+'</td>'+
+            '<td class="td-nom">'+esc(f.nombre)+
+              (f.procAnt!==f.procAct?'<br><span class="h3-note">Proc. '+esc(f.procAnt)+
+                ' → '+esc(f.procAct)+'</span>':'')+
+              (f.novAnt!==f.novAct?'<br><span class="h3-note">'+esc(f.novAnt)+' → '+
+                esc(f.novAct)+'</span>':'')+'</td>'+
+            '<td><span style="color:'+(cls[f.clase]||'#555')+';font-weight:600;'+
+              'font-size:11.5px">'+esc(f.clase)+'</span></td>'+
+            '<td class="mn">'+cop(f.retAnt)+'</td>'+
+            '<td class="mn">'+cop(f.retAct)+'</td>'+
+            '<td class="mn'+(f.dRet<0?' neg':'')+'"><b>'+cop(f.dRet)+'</b>'+
+              (f.pctRet!==null?'<br><span class="h3-note">'+
+                (f.pctRet>0?'+':'')+f.pctRet.toFixed(0)+'%</span>':'')+'</td>'+
+            '<td class="mn">'+cop(f.baseAnt)+'</td>'+
+            '<td class="mn">'+cop(f.baseAct)+'</td>'+
+            '<td class="mn'+(f.dBase<0?' neg':'')+'">'+cop(f.dBase)+'</td>'+
+            '<td class="td-nota">'+
+              (f.mov.length?
+                f.mov.map(function(m){
+                  return '<div><b>'+esc(m.cod)+'</b> '+esc(m.nom)+' · '+
+                    (m.tipo==='nuevo'?'<span style="color:#0E7A52">nuevo</span> '+cop(m.act):
+                     m.tipo==='dejó de pagarse'?'<span style="color:#B45309">dejó de pagarse</span> ('+
+                       cop(m.ant)+')':
+                     cop(m.ant)+' → '+cop(m.act))+
+                    ' · <b>'+cop(m.dif)+'</b></div>';
+                }).join(''):'<i>Ningún concepto del Prototipo 102 cambió</i>')+
+              '<div class="h3-note" style="margin-top:4px">'+esc(f.nota)+'</div>'+
+            '</td>'+
+          '</tr>';
+        }).join('')+
+        '</tbody></table></div>'
+        :'<p style="font-size:13px">Ningún servidor varió su retención por encima de '+
+         cop(H.tol)+' respecto de '+esc(H.etiqueta)+'.</p>')+
+        (H.nuevos.length?
+          '<h3 style="margin-top:18px">No estaban en '+esc(H.etiqueta)+'</h3>'+
+          '<div class="tbl-wrap"><table class="tbl" style="max-width:620px">'+
+          '<thead><tr><th>Cédula</th><th>Servidor</th><th>Base del mes</th>'+
+          '<th>Retenido</th></tr></thead><tbody>'+
+          H.nuevos.map(function(x){
+            return '<tr><td>'+esc(x.cedula)+'</td><td class="td-nom">'+esc(x.nombre)+'</td>'+
+              '<td class="mn">'+cop(x.base)+'</td><td class="mn">'+cop(x.ret)+'</td></tr>';
+          }).join('')+'</tbody></table></div>':'')+
+        (H.salieron.length?
+          '<h3 style="margin-top:18px">Estaban en '+esc(H.etiqueta)+' y ya no aparecen</h3>'+
+          '<div class="tbl-wrap"><table class="tbl" style="max-width:520px">'+
+          '<thead><tr><th>Cédula</th><th>Servidor</th><th>Retenía</th></tr></thead><tbody>'+
+          H.salieron.map(function(x){
+            return '<tr><td>'+esc(x.cedula)+'</td><td class="td-nom">'+esc(x.nombre)+'</td>'+
+              '<td class="mn">'+cop(x.ret)+'</td></tr>';
+          }).join('')+'</tbody></table></div>':'');
+      })())+
+  '</div>';
+
+  /* ── Por qué este mes sí se retuvo ────────────────────────────────── */
+  var NR=claveHist?nuevosConRetencion(claveHist):null;
+  function cadena(j){
+    function lin(et,va,cls,sub){
+      return '<tr><td style="padding:3px 8px 3px 0">'+et+
+        (sub?'<br><span class="h3-note">'+sub+'</span>':'')+'</td>'+
+        '<td class="mn" style="padding:3px 0;white-space:nowrap'+
+        (cls?';'+cls:'')+'">'+va+'</td></tr>';
+    }
+    return '<table style="border-collapse:collapse;font-size:12.5px;width:100%;max-width:620px">'+
+      '<tr><td colspan="2" style="padding:4px 0;font-weight:600;color:#1A3557">'+
+        'Conceptos del mes que suman a la base (Prototipo 102)</td></tr>'+
+      j.suman.map(function(x){
+        return lin('<span style="color:#5A6472">'+esc(x.cod)+'</span> '+esc(x.nom)+
+          (x.cod!=='101'&&x.cod!=='102'?' <b style="color:#B45309">·</b>':''),
+          cop(x.val));
+      }).join('')+
+      lin('<b>Total base Prototipo 102</b>','<b>'+cop(j.baseP102)+'</b>',
+          'border-top:1px solid #D4CFC7')+
+      '<tr><td colspan="2" style="padding:7px 0 2px;font-weight:600;color:#1A3557">'+
+        'Menos aportes obligatorios (no constitutivos de renta)</td></tr>'+
+      j.restan.map(function(x){
+        return lin('<span style="color:#5A6472">'+esc(x.cod)+'</span> '+esc(x.nom),
+          '−'+cop(x.val));
+      }).join('')+
+      lin('<b>Subtotal</b>','<b>'+cop(j.subtotal)+'</b>','border-top:1px solid #D4CFC7')+
+      lin('Menos renta exenta del 25 % (Art. 206 num. 10 E.T.)','−'+cop(j.reAplicada),'',
+        j.topeOpero?('Teórica '+cop(j.reTeorica)+', limitada al tope mensual de '+
+          cop(j.topeRE)+' (790 UVT al año ÷ 12)'):'')+
+      lin('<b>Base gravable</b>','<b>'+cop(j.baseGravable)+'</b>',
+          'border-top:1px solid #D4CFC7')+
+      lin('<b>En UVT</b> (UVT '+cop(j.uvt)+')',
+          '<b style="color:'+(j.supera?'#B45309':'#0E7A52')+'">'+
+          dec2(j.uvtBase)+' UVT</b>')+
+      lin('Umbral de la tabla del Art. 383',
+          '95,00 UVT = '+cop(j.umbral))+
+      lin('<b>Tramo aplicable</b>','<b>'+esc(j.tramo.txt)+'</b>',
+          'border-top:1px solid #D4CFC7')+
+      lin('<b>Retención que corresponde</b>'+
+          '<br><span class="h3-note">Aproximada al mil, Art. 577 E.T.</span>',
+          '<b>'+cop(j.retNormativa)+'</b>','border-top:1px solid #D4CFC7')+
+      (j.retencion!==j.retNormativa
+        ? lin('Liquidado por el sistema (concepto 513)',cop(j.retencion),'',0,0)
+        : '') +
+    '</table>';
+  }
+  var panelNR='<div class="section" data-foco="porque">'+
+    '<h2>Por qué este mes sí se retuvo</h2>'+
+    '<div class="info-box">'+
+      'La retención del Procedimiento 1 se liquida sobre el ingreso <b>del mes</b>, no sobre '+
+      'el sueldo. La tabla del artículo 383 del Estatuto Tributario empieza a cobrar por '+
+      'encima de <b>95 UVT de base gravable</b> —'+cop(95*S.P.uvt)+' con la UVT de la '+
+      'vigencia— y por debajo de ese punto la tarifa es cero. Por eso a un servidor que '+
+      'nunca había tenido retención se le retiene el mes en que le entra una bonificación, '+
+      'una prima o unas vacaciones: esos pagos suman a la base del mes y la empujan por '+
+      'encima del umbral. No es un cobro nuevo ni un error de liquidación; así está '+
+      'diseñada la tabla.'+
+    '</div>'+
+    /* La sustentación debe poder sacarse para CUALQUIER servidor con
+       retención, no solo para los que cruzaron el umbral este mes. El reclamo
+       llega cuando llega, y puede ser de alguien que viene reteniendo hace
+       rato o de un mes que todavía no se ha archivado. */
+    (function(){
+      var conRet=S.computed.rows.filter(function(r){
+        return (r.retRep||0)>0||((r.norma&&r.norma.rP1)||0)>0;
+      }).sort(function(a,b){ return a.nombre<b.nombre?-1:1; });
+      if(!conRet.length) return '<p style="font-size:13px">Ningún servidor del período '+
+        'tiene retención ni le corresponde.</p>';
+      return '<div class="tb-row" style="margin:12px 0 4px;align-items:center">'+
+        '<label style="font-size:13px;margin-right:8px">Sustentación de cualquier '+
+        'servidor:</label>'+
+        '<select id="sel-sust" class="sel-mes" style="min-width:300px">'+
+        conRet.map(function(r){
+          var v=Math.round((r.retRep||0)||((r.norma&&r.norma.rP1)||0));
+          return '<option value="'+esc(r.cedula)+'">'+esc(r.nombre)+' — '+cop(v)+'</option>';
+        }).join('')+'</select>'+
+        '<button class="btn-add" id="btn-sust" style="margin-left:8px">📄 Generar</button>'+
+      '</div>'+
+      '<div class="mini-note" style="margin-bottom:14px">'+conRet.length+' servidor(es) '+
+        'con retención en el período. No hace falta mes archivado: la sustentación se arma '+
+        'con la depuración del mes que está cargado. El mes de comparación, si lo hay, '+
+        'entra como contraste.</div>';
+    })()+
+    (!NR?'<p style="font-size:13px">Seleccione arriba un mes de comparación.</p>':
+     NR.sinMes?'<p style="font-size:13px">El mes seleccionado ya no está en el histórico.</p>':
+     NR.sinDetalle?'<div class="alerta-inline">El mes <b>'+esc(NR.etiqueta)+'</b> se archivó '+
+       'sin el detalle de retención. Vuelva a archivarlo en la pestaña Histórico.</div>':
+     !NR.lista.length?'<p style="font-size:13px">Ningún servidor pasó de no tener retención '+
+       'en '+esc(NR.etiqueta)+' a tenerla en este período.</p>':
+     '<p style="font-size:13px"><b>'+NR.lista.length+'</b> servidor(es) no tenían retención '+
+       'en '+esc(NR.etiqueta)+' y este mes su base supera el umbral'+
+       (NR.pendientes?': a '+NR.retenidos+' el sistema ya les retuvo y a '+NR.pendientes+
+         ' <b style="color:#B45309">corresponde retenerles y no se hizo</b>':'')+'. '+
+       'Para cada uno queda la cadena completa, y el botón genera la constancia en Word '+
+       'para entregarle al servidor.</p>'+
+     NR.lista.map(function(j){
+       return '<div style="border:1px solid #D4CFC7;border-radius:8px;padding:12px 14px;'+
+         'margin-bottom:12px;background:#FCFBF9">'+
+         '<div style="display:flex;justify-content:space-between;align-items:flex-start;'+
+           'gap:12px;flex-wrap:wrap;margin-bottom:8px">'+
+           '<div><b style="font-size:14px">'+esc(j.nombre)+'</b>'+
+             '<span class="h3-note"> · C.C. '+esc(j.cedula)+
+             (j.nov!=='NORMAL'?' · '+esc(j.nov):'')+'</span>'+
+             (j.caso==='pendiente'
+               ? ' <span style="color:#B45309;font-weight:600;font-size:12px">'+
+                 '· corresponde retener y el sistema no lo hizo</span>':'')+'<br>'+
+             '<span style="font-size:12.5px;color:#5A6472">'+
+             (j.porExtra
+               ? 'Sin los pagos adicionales del mes la base habría quedado en '+
+                 dec2(j.uvtSinExtra)+' UVT y no habría habido retención. '+
+                 'Los pagos adicionales suman '+cop(j.sumaExtra)+'.'
+               : 'La asignación ordinaria por sí sola ya supera el umbral.')+
+             '</span></div>'+
+           '<button class="btn-add btn-constancia" data-ced="'+esc(j.cedula)+'">'+
+             '📄 Sustentación</button>'+
+         '</div>'+
+         cadena(j)+
+         (j.prev?'<div class="mini-note" style="margin-top:8px">En '+esc(j.prev.etiqueta)+
+           ' la base gravable fue '+cop(j.prev.bg)+' ('+dec2(j.prev.uvt)+' UVT), '+
+           'por debajo del umbral, y no hubo retención.</div>':'')+
+       '</div>';
+     }).join(''))+
+  '</div>';
+
   /* Panel del acumulado anual: insumo del Procedimiento 2 */
   var hAc=acumuladoDesdeHistorico();
   var nManual=Object.keys(S.acumAnual||{}).length;
@@ -4903,7 +6706,7 @@ function vRetencion(){
     '</div>'+
   '</div>';
 
-  return avisoCruz+panelAcum+
+  return avisoCruz+panelHist+panelNR+panelAcum+
     '<div class="section">'+
     '<h2>Retención en la fuente — Depuración mensual (Art. 383 ET)</h2>'+
     '<div class="info-box">'+
@@ -5962,6 +7765,18 @@ function verificarEntrega(){
   var per=C.periodo;
 
   /* ── 1. Integridad de la lectura del PDF ───────────────────────────── */
+  var faltan=(S.data&&S.data.encabezadosFaltantes)||0;
+  if(faltan){
+    add('BLOQUEA','Encabezados no reconocidos',
+      'El PDF cierra '+S.data.totalesEnPDF+' bloques con la línea TOTAL IDENTIFICACION, '+
+      'pero solo se reconocieron '+S.data.employees.length+' encabezados de servidor: '+
+      'faltan '+faltan+'. Los conceptos de esos servidores quedaron sumados al bloque '+
+      'anterior, de modo que ni sus cifras ni las del servidor que los absorbió sirven.',
+      'Vuelva a exportar la prenómina desde KACTUS —no una impresión ni un recorte— y '+
+      'cárguela de nuevo. Si el problema persiste, revise en el PDF los bloques '+
+      'señalados en la tabla de cruce de datos.',
+      'detalle');
+  }
   var dd=(S.data&&S.data.descuadres)||[];
   if(dd.length){
     add('BLOQUEA','Integridad de la lectura',
@@ -6116,7 +7931,14 @@ function verificarEntrega(){
   /* ── 10-bis. Asignación básica contra la caracterización de planta ──── */
   var nPl=Object.keys(S.planta||{}).length;
   if(nPl){
-    var difSal=[], difGR=[], fueraPl=[], difTot=0, grTot=0, regMal=[];
+    /* El mismo contraste que muestra la tabla de la pestaña Empleados, para
+       que el control y la tabla no puedan decir cosas distintas. */
+    var A=contrasteAsignacion()||{filas:[],sube:0,baja:0,neto:0,totalAbs:0,montoSube:0,montoBaja:0};
+    var difSal=A.filas.filter(function(f){return f.difAsig;});
+    var difGR=A.filas.filter(function(f){return f.difGR_;});
+    var difTot=difSal.reduce(function(a,f){return a+Math.abs(f.dif);},0);
+    var grTot=difGR.reduce(function(a,f){return a+Math.abs(f.difGR);},0);
+    var fueraPl=[], regMal=[];
     S.computed.rows.forEach(function(r){
       var pt=S.planta[String(r.cedula)];
       if(!pt){ fueraPl.push(r); return; }
@@ -6125,28 +7947,6 @@ function verificarEntrega(){
          contrato de trabajo, el empleado publico por acto administrativo, y la
          liquidacion prestacional no es la misma. */
       if(pt.regimen && pt.regimen!==S.regimen) regMal.push({r:r, p:pt});
-      /* Tolerancia de un salario mínimo diario: la planta registra la
-         asignación mensual y la prenómina liquida por días. */
-      var tol=Math.round(P.smlmv/30);
-      if(pt.sueldo){
-        var bas=r.salariaBasico||r.c['101']||0;
-        if(bas>0 && Math.abs(bas-pt.sueldo)>tol){
-          difSal.push({r:r, cpt:'101 asignación básica',
-            planta:pt.sueldo, nomina:bas, dif:bas-pt.sueldo});
-          difTot+=Math.abs(bas-pt.sueldo);
-        }
-      }
-      /* Gastos de representación: concepto 102. Es factor de salario
-         (Decreto 1042 de 1978, artículo 42), entra al IBC y a la base
-         prestacional, pero NO a la base de retención. */
-      var gr=r.c['102']||0;
-      if(pt.gastosRep || gr){
-        if(Math.abs(gr-(pt.gastosRep||0))>tol){
-          difGR.push({r:r, planta:pt.gastosRep||0, nomina:gr,
-            dif:gr-(pt.gastosRep||0)});
-          grTot+=Math.abs(gr-(pt.gastosRep||0));
-        }
-      }
     });
     if(regMal.length){
       add('BLOQUEA','Régimen del servidor',
@@ -6166,12 +7966,16 @@ function verificarEntrega(){
     if(difSal.length){
       add('ADVIERTE','Asignación básica vs. planta',
         difSal.length+' servidor(es) con asignación básica distinta a la registrada '+
-        'en la caracterización de planta, por '+cop(difTot)+' en valor absoluto. '+
-        'Puede ser un ascenso o un encargo no actualizado en el libro de la DTH, o '+
-        'un error de liquidación: en ambos casos hay que aclararlo antes de firmar.',
-        'Contraste los casos contra el acto administrativo de nombramiento o de '+
-        'encargo y pida a la DTH actualizar la caracterización si procede.',
-        'empleados');
+        'en la caracterización de planta: '+A.sube+' por encima ('+cop(A.montoSube)+') y '+
+        A.baja+' por debajo ('+cop(Math.abs(A.montoBaja))+'), con un neto de '+
+        cop(A.neto)+' al mes. Puede ser un ascenso o un encargo no actualizado en el '+
+        'libro de la DTH, el decreto anual de salarios aplicado en una fuente y no en la '+
+        'otra, o un error de liquidación. Si la prenómina y la caracterización son de '+
+        'cortes distintos, el desfase de fechas explica buena parte.',
+        'Abra la tabla «Asignación básica · prenómina vs. caracterización de planta» en '+
+        'la pestaña Empleados: trae el detalle servidor por servidor. Contraste cada '+
+        'caso contra el acto administrativo de nombramiento o de encargo.',
+        'detalle','asignacion');
     } else {
       add('OK','Asignación básica vs. planta',
         'La asignación básica de la prenómina coincide con la caracterización de '+
@@ -6190,7 +7994,7 @@ function verificarEntrega(){
         'aquí arrastra el IBC, las prestaciones y la retención a la vez.',
         'Contraste contra el decreto que fija la remuneración del cargo y verifique '+
         'que el concepto 102 esté dentro del Prototipo 101 y fuera del 102.',
-        'empleados');
+        'detalle');
     }
     if(fueraPl.length){
       /* Un servidor puede faltar en la planta activa porque se desvinculo en
@@ -6230,6 +8034,21 @@ function verificarEntrega(){
           'planta');
       }
     }
+  }
+
+  /* ── 10-ter. Periodo de la planilla ────────────────────────────────── */
+  if(S.pilaPeriodo&&S.computed.periodo&&S.computed.periodo.mes&&
+     (S.pilaPeriodo.mes!==S.computed.periodo.mes||
+      S.pilaPeriodo.anio!==S.computed.periodo.anio)){
+    var MS=['','enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+            'septiembre','octubre','noviembre','diciembre'];
+    add('ADVIERTE','Período de la planilla',
+      'La prenómina es de '+MS[S.computed.periodo.mes]+' de '+S.computed.periodo.anio+
+      ' y la planilla cargada declara '+MS[S.pilaPeriodo.mes]+' de '+S.pilaPeriodo.anio+'. '+
+      'El cruce espejo y las tarifas de ARL salen de esa planilla, de modo que las '+
+      'diferencias que arroje no son atribuibles a la nómina del período.',
+      'Cargue la planilla del mismo mes de la prenómina.',
+      'pila');
   }
 
   /* ── 11. Clase de riesgo para ARL ──────────────────────────────────── */
@@ -6444,6 +8263,20 @@ function vInforme(){
       '<button class="btn-elaborar" id="btn-elaborar">📝 Elaborar informe</button>'+
       '<button class="btn-acta" id="btn-acta">📄 Acta Resumen FO-GD-11</button>'+
     '</div>'+
+    /* Documento de trabajo para quien liquida: otro lector, otro tono */
+    '<div class="elaborar-box" style="background:#FAF7F3;border-color:#C45B2E;margin-top:12px">'+
+      '<div class="eb-txt">'+
+        '<div class="eb-t">Relación de casos para la técnica</div>'+
+        '<div class="eb-s">Los casos por aclarar, agrupados por tema, con la norma de cada '+
+        'uno y qué revisar en KACTUS. Lleva una columna en blanco para su respuesta. '+
+        'No calific'+'a ni dictamina: es un documento de trabajo.'+
+        (function(){ var D=datosParaTecnica();
+          return D?' Ahora mismo relacionaría <b>'+D.total+'</b> caso(s).':''; })()+
+        '</div>'+
+      '</div>'+
+      '<button class="btn-acta" id="btn-tecnica" style="background:#C45B2E">'+
+        '📋 Relación de casos</button>'+
+    '</div>'+
   '</div>';
   return h;
 }
@@ -6517,6 +8350,15 @@ function wire(){
   });
 
   /* Régimen */
+  Array.prototype.forEach.call(document.querySelectorAll('.btn-constancia'),
+    function(b){ b.onclick=function(){ exportSustentacionRetencion(this.getAttribute('data-ced')); }; });
+  var bsu=qs('btn-sust');
+  if(bsu) bsu.onclick=function(){
+    var sel=qs('sel-sust');
+    if(sel&&sel.value) exportSustentacionRetencion(sel.value);
+  };
+  var shr=qs('sel-histret');
+  if(shr) shr.onchange=function(){ S.histRetMes=this.value; render(); };
   var sr=qs('sel-reg');
   if(sr) sr.onchange=function(){ cambiarRegimen(this.value); render(); };
 
@@ -6634,6 +8476,13 @@ function wire(){
       initInforme(true);
       render();
     }
+  };
+  var btc=qs('btn-tecnica');
+  if(btc) btc.onclick=function(){
+    var b=this; b.disabled=true; b.textContent='⏳ Generando…';
+    try{ exportRelacionTecnica(); }
+    catch(e){ alert('Error al generar la relación: '+e.message); }
+    b.disabled=false; b.textContent='📋 Relación de casos';
   };
   var bac=qs('btn-acta');
   if(bac) bac.onclick=function(){
@@ -6974,6 +8823,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:#F0EDE8;color:#1C1C1E;f
 @media(max-width:700px){.hist-carga{grid-template-columns:1fr}}
 .debug-pre{background:#0F2340;color:#B8C8DC;padding:14px;border-radius:8px;font-family:'Consolas','Monaco',monospace;font-size:11px;line-height:1.6;overflow-x:auto;max-height:420px;overflow-y:auto;white-space:pre}
 .top-sel{background:#fff;border:1px solid #C8BFAF;color:#3A3230;padding:5px 8px;border-radius:6px;font-size:12px}
+.sel-mes{background:#fff;border:1px solid #C8BFAF;color:#3A3230;padding:6px 10px;border-radius:6px;font-size:13px;font-family:inherit;min-width:210px}
+.sel-mes:focus{outline:2px solid #C45B2E;outline-offset:1px}
 
 /* Body */
 .v5-body{flex:1;padding:20px 24px;max-width:1300px;width:100%}
