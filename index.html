@@ -148,6 +148,21 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
 (function(){'use strict';
 
 /* =========================================================================
+ * VERSION DE LA APLICACION
+ *
+ * El archivo se descarga y se vuelve a subir a GitHub cada vez que cambia
+ * algo, y hasta ahora no habia forma de saber cual estaba abierto en el
+ * navegador. La version se muestra en la barra superior, queda en el
+ * respaldo y se estampa en el pie de los documentos que se generan, para
+ * poder decir con que version se produjo un informe ya entregado.
+ *
+ * Al cambiar la aplicacion hay que subir APP_VER y APP_FECHA.
+ * ======================================================================= */
+var APP_VER='5.9';
+var APP_FECHA='24/11/2026';
+var APP_NOTA='Sustentación de retención para cualquier servidor';
+
+/* =========================================================================
  * PARÁMETROS NORMATIVOS 2026
  * ======================================================================= */
 var DEFAULT_P={
@@ -503,6 +518,7 @@ function serializar(){
       novedades:w.novedades, novedadesTexto:w.novedadesTexto,
       pilaDet:w.pilaDet, pilaArchivo:w.pilaArchivo, historico:w.historico,
       acumAnual:w.acumAnual, acumFuente:w.acumFuente,
+      _app:{ver:APP_VER, fecha:APP_FECHA},
       planta:w.planta, plantaFuente:w.plantaFuente,
       plantaRetiros:w.plantaRetiros, plantaArchivo:w.plantaArchivo,
       plantaDiag:w.plantaDiag,
@@ -3770,7 +3786,8 @@ function exportSustentacionRetencion(cedula){
         '</span></td></tr>'+
     '</table>'+
     '<p style="margin-top:14pt;font-size:8.5pt;color:#5A6472;text-align:left">'+
-      'Documento de trabajo interno. Las cifras provienen de la prenómina de '+perStr+
+      'Documento de trabajo interno. Generado con la herramienta de revisión de nómina v'+
+      APP_VER+' ('+APP_FECHA+'). Las cifras provienen de la prenómina de '+perStr+
       ' liquidada en KACTUS. Expedir constancia al servidor, si procede, corresponde a la '+
       'Dirección de Talento Humano.</p>'+
     '</div></body></html>';
@@ -4307,8 +4324,9 @@ function exportRelacionTecnica(){
       '</tr>'+
     '</table>'+
     '<p style="margin-top:16pt;font-size:8.5pt;color:#5A6472;text-align:left">'+
-      'Documento de trabajo interno de la Dirección de Talento Humano. Las cifras provienen de '+
-      'la prenómina de '+perStr+' procesada en KACTUS'+
+      'Documento de trabajo interno de la Dirección de Talento Humano. Generado con la '+
+      'herramienta de revisión de nómina v'+APP_VER+' ('+APP_FECHA+'). Las cifras '+
+      'provienen de la prenómina de '+perStr+' procesada en KACTUS'+
       (S.pilaArchivo?', de la planilla '+esc(S.pilaArchivo):'')+
       (S.plantaArchivo?' y de la caracterización de planta '+esc(S.plantaArchivo):'')+'.</p>'+
     '</div></body></html>';
@@ -4891,6 +4909,8 @@ function exportXlsx(){
   XLSX.utils.book_append_sheet(wb, pintar(XLSX.utils.aoa_to_sheet([
     ['AUDITORÍA DE NÓMINA — '+perStr.toUpperCase()+' — '+regTxt.toUpperCase()],
     ['Gobernación de Casanare · NIT 892.099.216 · Dirección de Talento Humano'],
+    ['Generado con la herramienta de revisión de nómina v'+APP_VER+' ('+APP_FECHA+') el '+
+     new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'})],
     [''],
     ['CÓMO ESTÁ CONSTRUIDO ESTE LIBRO'],
     ['Solo la hoja DATOS PRENÓMINA contiene datos duros: es lo leído del PDF de KACTUS.'],
@@ -6011,6 +6031,8 @@ function topbar(){
       '<span class="top-per">'+esc(per)+'</span>'+
       (S.fileName?'<span class="top-file">'+esc(S.fileName)+'</span>':'')+
       '<span class="save-chip '+gCls+'" title="Autoguardado cada 30 s">●&nbsp;'+gTxt+hora+'</span>'+
+      '<span class="top-ver" title="Versión de la aplicación · '+esc(APP_FECHA)+
+        ' · '+esc(APP_NOTA)+'">v'+esc(APP_VER)+'</span>'+
     '</div>'+
     '<div class="top-right">'+
       '<select id="sel-reg" class="top-sel" title="Cada régimen guarda su información por separado">'+
@@ -8307,6 +8329,10 @@ function vParams(){
     pf('p-bspT2','BSP tarifa > base %',P.bspT2*100,'Dec. 0320/2026')+
     '</div>'+
     '<button id="btn-ap" class="btn-exp" style="margin-top:12px">Aplicar y recalcular</button>'+
+    '<div class="mini-note" style="margin:14px 0 0">Aplicación versión <b>v'+
+      esc(APP_VER)+'</b>, del '+esc(APP_FECHA)+'. Último cambio: '+esc(APP_NOTA)+'. '+
+      'Si la versión de este recuadro no coincide con la del repositorio, descargue de '+
+      'nuevo el archivo y vuelva a abrirlo.</div>'+
     '<h3 style="margin-top:22px">Tarifas por clase de riesgo</h3>'+
     '<div class="info-box">'+
       'Tarifas del artículo 2.2.4.3.5 del Decreto 1072 de 2015 (antes artículo 13 del '+
@@ -8823,6 +8849,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:#F0EDE8;color:#1C1C1E;f
 @media(max-width:700px){.hist-carga{grid-template-columns:1fr}}
 .debug-pre{background:#0F2340;color:#B8C8DC;padding:14px;border-radius:8px;font-family:'Consolas','Monaco',monospace;font-size:11px;line-height:1.6;overflow-x:auto;max-height:420px;overflow-y:auto;white-space:pre}
 .top-sel{background:#fff;border:1px solid #C8BFAF;color:#3A3230;padding:5px 8px;border-radius:6px;font-size:12px}
+.top-ver{font-size:11px;color:#8A8178;border:1px solid #D9D2C7;border-radius:5px;padding:2px 7px;letter-spacing:.3px}
 .sel-mes{background:#fff;border:1px solid #C8BFAF;color:#3A3230;padding:6px 10px;border-radius:6px;font-size:13px;font-family:inherit;min-width:210px}
 .sel-mes:focus{outline:2px solid #C45B2E;outline-offset:1px}
 

@@ -318,6 +318,19 @@ remuneración— se capturan a mano en la misma pestaña, una por línea:
 Corren el aniversario tantos días como hayan durado, que es lo que define si la
 bonificación por servicios se causó o no en el mes auditado.
 
+## Versión
+
+La barra superior muestra la versión a la derecha del indicador de guardado, y la pestaña
+Parámetros la trae completa con la fecha y el último cambio. **Si esa versión no coincide
+con la del repositorio, el archivo que tiene abierto está desactualizado**: descargue de
+nuevo `index.html` y vuelva a abrirlo.
+
+La versión también queda estampada en el pie de los documentos que se generan y en la hoja
+INSTRUCCIONES del libro, de modo que de un informe ya entregado se puede saber con qué
+versión se produjo. Y queda en el archivo de respaldo.
+
+Versión actual: **v5.9**, del 24 de noviembre de 2026.
+
 ## Parámetros de la vigencia
 
 Se editan en la pestaña Parámetros y quedan guardados. Para 2026: SMLMV $1.750.905,
